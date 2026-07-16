@@ -551,6 +551,413 @@ body {
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* ==================== PDF Editor ==================== */
+.edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.btn-sm {
+  padding: 8px 14px;
+  font-size: 13px;
+  margin-top: 0;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.zoom-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 40px;
+  text-align: center;
+}
+
+.toolbar-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.edit-page-card {
+  position: relative;
+  margin-bottom: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  display: inline-block;
+  overflow: hidden;
+}
+
+.edit-page-card canvas {
+  display: block;
+}
+
+.annotations-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.annotation-item {
+  position: absolute;
+  pointer-events: auto;
+  cursor: move;
+  user-select: none;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  min-width: 20px;
+  min-height: 20px;
+}
+
+.annotation-item:hover {
+  border-color: rgba(79, 70, 229, 0.4);
+}
+
+.annotation-item.selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+}
+
+.annotation-text {
+  background: rgba(255, 255, 200, 0.9);
+  padding: 6px 10px;
+  font-size: 14px;
+  color: #333;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  outline: none;
+  min-width: 40px;
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+}
+
+.annotation-image {
+  background: transparent;
+}
+
+.annotation-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.annotation-resize-handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--primary);
+  border: 1px solid white;
+  border-radius: 50%;
+  pointer-events: auto;
+}
+
+.resize-nw { top: -4px; left: -4px; cursor: nw-resize; }
+.resize-ne { top: -4px; right: -4px; cursor: ne-resize; }
+.resize-sw { bottom: -4px; left: -4px; cursor: sw-resize; }
+.resize-se { bottom: -4px; right: -4px; cursor: se-resize; }
+
+/* ==================== PDF Translator ==================== */
+.translate-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.translate-mode-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+
+.translate-mode-btn {
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all var(--transition);
+}
+
+.translate-mode-btn.active {
+  background: var(--primary);
+  color: white;
+}
+
+.translate-mode-btn:hover:not(.active) {
+  color: var(--primary);
+}
+
+.translate-lang {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+}
+
+.translate-lang select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  cursor: pointer;
+}
+
+.translate-lang select:focus {
+  border-color: var(--primary);
+}
+
+/* Text layer for PDF selection */
+.textLayer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  opacity: 0.2;
+  line-height: 1.0;
+}
+
+.textLayer ::selection {
+  background: rgba(79, 70, 229, 0.3);
+}
+
+.textLayer span {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.textLayer .highlighted {
+  background-color: rgba(255, 220, 100, 0.4);
+}
+
+/* Translate page card wrapper */
+.translate-page-card {
+  position: relative;
+  margin-bottom: 24px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  display: inline-block;
+  overflow: hidden;
+}
+
+.translate-page-card canvas {
+  display: block;
+}
+
+/* Floating popup */
+.translate-popup {
+  position: fixed;
+  z-index: 9999;
+  width: 360px;
+  max-height: 320px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+  overflow: hidden;
+  animation: fadeIn 0.15s ease;
+}
+
+.translate-popup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--primary-light);
+  border-bottom: 1px solid var(--border);
+}
+
+.translate-popup-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.translate-popup-close {
+  background: none;
+  border: none;
+  font-size: 18px;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.translate-popup-close:hover {
+  color: var(--text);
+}
+
+.translate-popup-original {
+  padding: 12px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  max-height: 100px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+.translate-popup-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0 14px;
+}
+
+.translate-popup-result {
+  padding: 12px 14px;
+  font-size: 14px;
+  color: var(--text);
+  max-height: 140px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+/* Full translation: two-column layout */
+.translate-full-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+  max-height: calc(100vh - 200px);
+}
+
+.translate-pdf-col {
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
+  padding-right: 8px;
+}
+
+.translate-pdf-col .translate-page-card {
+  transform-origin: top left;
+}
+
+.translate-result-col {
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.translate-result-inner {
+  padding: 4px 0;
+}
+
+.translate-result-page-label {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  color: white;
+  background: var(--primary);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.translate-result-para {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.translate-result-para:last-child {
+  border-bottom: none;
+}
+
+.translate-result-original {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: 4px;
+  border-left: 3px solid var(--border);
+}
+
+.translate-result-translated {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.7;
+  padding: 8px 10px;
+  background: rgba(79, 70, 229, 0.03);
+  border-radius: 4px;
+  border-left: 3px solid var(--primary);
+}
+
+.translate-result-original-label,
+.translate-result-translated-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.translate-result-original-label { color: var(--text-muted); }
+.translate-result-translated-label { color: var(--primary); }
+
+#translate-progress-text {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Paragraph indicator line */
+.translate-para-gap {
+  height: 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
 /* ==================== Responsive ==================== */
 @media (max-width: 768px) {
   .sidebar {
