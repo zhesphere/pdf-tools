@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Tools - 在线PDF工具箱</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="logo">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+        <span>PDF Tools</span>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item active" data-tool="merge">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/>
+            <path d="M18 15v1a2 2 0 0 1-2 2h-1M6 9v8a2 2 0 0 0 2 2h2"/>
+          </svg>
+          <span>合并PDF</span>
+        </button>
+        <button class="nav-item" data-tool="split">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+            <path d="M6 9v3M6 12v3M6 9l3 3M6 15l3-3"/>
+          </svg>
+          <span>拆分PDF</span>
+        </button>
+        <button class="nav-item" data-tool="remove">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            <path d="M19 6l-.867 12.142A2 2 0 0 1 16.138 20H7.862a2 2 0 0 1-1.995-1.858L5 6"/>
+          </svg>
+          <span>删除页面</span>
+        </button>
+        <button class="nav-item" data-tool="rotate">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="1 4 1 10 7 10"/>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+          </svg>
+          <span>旋转PDF</span>
+        </button>
+        <button class="nav-item" data-tool="reorder">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/>
+            <line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/>
+            <line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+          </svg>
+          <span>重排页面</span>
+        </button>
+        <button class="nav-item" data-tool="info">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/>
+            <line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+          <span>PDF信息</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <p>所有文件处理均在服务端完成</p>
+        <p>上传文件1小时后自动删除</p>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main">
+      <!-- Merge PDF Tool -->
+      <section id="tool-merge" class="tool-panel active">
+        <div class="tool-header">
+          <h1>合并 PDF</h1>
+          <p>将多个PDF文件合并为一个文件。拖拽调整顺序后点击合并。</p>
+        </div>
+
+        <div class="upload-area" id="merge-upload">
+          <div class="upload-zone" id="merge-dropzone">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p>拖拽PDF文件到此处 或 点击选择文件</p>
+            <span>支持同时选择多个文件</span>
+            <input type="file" id="merge-input" accept=".pdf" multiple hidden>
+          </div>
+        </div>
+
+        <div class="file-list" id="merge-file-list"></div>
+
+        <button class="btn-primary" id="merge-btn" disabled>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/>
+            <path d="M18 15v1a2 2 0 0 1-2 2h-1M6 9v8a2 2 0 0 0 2 2h2"/>
+          </svg>
+          合并 PDF
+        </button>
+
+        <div class="progress-bar" id="merge-progress" style="display:none;">
+          <div class="progress-fill"></div>
+        </div>
+        <p class="status-text" id="merge-status"></p>
+      </section>
+
+      <!-- Split PDF Tool -->
+      <section id="tool-split" class="tool-panel">
+        <div class="tool-header">
+          <h1>拆分 PDF</h1>
+          <p>提取指定页面或将每一页拆分为独立的PDF文件。</p>
+        </div>
+
+        <div class="upload-area single" id="split-upload">
+          <div class="upload-zone" id="split-dropzone">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p>拖拽PDF文件到此处 或 点击选择文件</p>
+            <input type="file" id="split-input" accept=".pdf" hidden>
+          </div>
+          <div class="selected-file" id="split-selected" style="display:none;"></div>
+        </div>
+
+        <div class="split-options">
+          <div class="option-card">
+            <h3>📄 提取指定页面</h3>
+            <p>输入页码范围，例如: 1,3,5-8</p>
+            <input type="text" id="split-pages" class="text-input" placeholder="例: 1,3,5-8">
+            <button class="btn-primary" id="split-extract-btn" disabled>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M5 12h14"/><polyline points="12 5 19 12 12 19"/>
+              </svg>
+              提取页面
+            </button>
+          </div>
+          <div class="option-card">
+            <h3>📑 拆分所有页面</h3>
+            <p>将每一页导出为单独的PDF文件并打包下载</p>
+            <button class="btn-primary" id="split-all-btn" disabled>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M5 12h14"/><polyline points="12 5 19 12 12 19"/>
+              </svg>
+              拆分全部页面
+            </button>
+          </div>
+        </div>
+
+        <div class="progress-bar" id="split-progress" style="display:none;">
+          <div class="progress-fill"></div>
+        </div>
+        <p class="status-text" id="split-status"></p>
+      </section>
+
+      <!-- Remove Pages Tool -->
+      <section id="tool-remove" class="tool-panel">
+        <div class="tool-header">
+          <h1>删除页面</h1>
+          <p>从PDF中删除指定的页面。</p>
+        </div>
+
+        <div class="upload-area single" id="remove-upload">
+          <div class="upload-zone" id="remove-dropzone">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p>拖拽PDF文件到此处 或 点击选择文件</p>
+            <input type="file" id="remove-input" accept=".pdf" hidden>
+          </div>
+          <div class="selected-file" id="remove-selected" style="display:none;"></div>
+        </div>
+
+        <div class="option-card">
+          <h3>要删除的页面</h3>
+          <p>输入要删除的页码范围，例如: 1,3,5-8</p>
+          <input type="text" id="remove-pages" class="text-input" placeholder="例: 1,3,5-8">
+          <button class="btn-danger" id="remove-btn" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+            删除页面
+          </button>
+        </div>
+
+        <div class="progress-bar" id="remove-progress" style="display:none;">
+          <div class="progress-fill"></div>
+        </div>
+        <p class="status-text" id="remove-status"></p>
+      </section>
+
+      <!-- Rotate PDF Tool -->
+      <section id="tool-rotate" class="tool-panel">
+        <div class="tool-header">
+          <h1>旋转 PDF</h1>
+          <p>旋转PDF中的全部或部分页面。</p>
+        </div>
+
+        <div class="upload-area single" id="rotate-upload">
+          <div class="upload-zone" id="rotate-dropzone">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p>拖拽PDF文件到此处 或 点击选择文件</p>
+            <input type="file" id="rotate-input" accept=".pdf" hidden>
+          </div>
+          <div class="selected-file" id="rotate-selected" style="display:none;"></div>
+        </div>
+
+        <div class="option-card">
+          <h3>旋转角度</h3>
+          <div class="rotate-buttons">
+            <button class="rotate-option" data-angle="90">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="1 4 1 10 7 10"/>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+              </svg>
+              <span>顺时针90°</span>
+            </button>
+            <button class="rotate-option" data-angle="180">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="1 4 1 10 7 10"/>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+              </svg>
+              <span>旋转180°</span>
+            </button>
+            <button class="rotate-option" data-angle="270">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 20 23 14 17 14"/>
+                <path d="M20.49 9a9 9 0 1 1-2.13 9.36L23 14"/>
+              </svg>
+              <span>逆时针90°</span>
+            </button>
+          </div>
+          <p style="margin-top: 12px;">指定页面范围（留空则旋转所有页面）</p>
+          <input type="text" id="rotate-pages" class="text-input" placeholder="留空=全部, 或输入: 1,3,5-8">
+          <button class="btn-primary" id="rotate-btn" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="1 4 1 10 7 10"/>
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+            </svg>
+            旋转 PDF
+          </button>
+        </div>
+
+        <div class="progress-bar" id="rotate-progress" style="display:none;">
+          <div class="progress-fill"></div>
+        </div>
+        <p class="status-text" id="rotate-status"></p>
+      </section>
+
+      <!-- Reorder Pages Tool -->
+      <section id="tool-reorder" class="tool-panel">
+        <div class="tool-header">
+          <h1>重排页面</h1>
+          <p>反转页面顺序或自定义新顺序。</p>
+        </div>
+
+        <div class="upload-area single" id="reorder-upload">
+          <div class="upload-zone" id="reorder-dropzone">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p>拖拽PDF文件到此处 或 点击选择文件</p>
+            <input type="file" id="reorder-input" accept=".pdf" hidden>
+          </div>
+          <div class="selected-file" id="reorder-selected" style="display:none;"></div>
+        </div>
+
+        <div class="option-card">
+          <h3>🔄 反转页面顺序</h3>
+          <p>完全反转PDF页面的排列顺序（最后一页变第一页）</p>
+          <button class="btn-primary" id="reorder-reverse-btn" disabled>反转页面顺序</button>
+        </div>
+        <div class="option-card">
+          <h3>🔢 自定义顺序</h3>
+          <p>输入新的页面排列顺序(逗号分隔)，例如: 3,1,2</p>
+          <input type="text" id="reorder-custom" class="text-input" placeholder="例: 3,1,2 (第3页在先)">
+          <button class="btn-primary" id="reorder-custom-btn" disabled>重新排序</button>
+        </div>
+
+        <div class="progress-bar" id="reorder-progress" style="display:none;">
+          <div class="progress-fill"></div>
+        </div>
+        <p class="status-text" id="reorder-status"></p>
+      </section>
+
+      <!-- PDF Info Tool -->
+      <section id="tool-info" class="tool-panel">
+        <div class="tool-header">
+          <h1>PDF 信息</h1>
+          <p>查看PDF文件的详细信息，包括页数、页面尺寸、元数据等。</p>
+        </div>
+
+        <div class="upload-area single" id="info-upload">
+          <div class="upload-zone" id="info-dropzone">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p>拖拽PDF文件到此处 或 点击选择文件</p>
+            <input type="file" id="info-input" accept=".pdf" hidden>
+          </div>
+        </div>
+
+        <div class="info-result" id="info-result" style="display:none;"></div>
+        <p class="status-text" id="info-status"></p>
+      </section>
+    </main>
+  </div>
+
+  <!-- Toast notification -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- PDF processing libraries (browser) -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
