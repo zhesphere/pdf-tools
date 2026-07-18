@@ -568,77 +568,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   customBtn.addEventListener('click', () => doReorder(customInput.value.trim()));
 })();
 
-// ==================== 6. PDF Info ====================
-(function() {
-  const statusEl = document.getElementById('info-status');
-  const resultDiv = document.getElementById('info-result');
-
-  function setFile(file) {
-    showInfo(file);
-  }
-
-  setupDragDrop('info-dropzone', 'info-input', setFile);
-
-  async function showInfo(file) {
-    statusEl.textContent = '读取中...';
-    statusEl.className = 'status-text';
-    resultDiv.style.display = 'none';
-
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdf = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-      const totalPages = pdf.getPageCount();
-
-      // Get page sizes
-      const pages = [];
-      for (let i = 0; i < totalPages; i++) {
-        const page = pdf.getPage(i);
-        const { width, height } = page.getSize();
-        pages.push({ page: i + 1, width: Math.round(width), height: Math.round(height) });
-      }
-
-      const info = {
-        fileName: file.name,
-        pageCount: totalPages,
-        fileSize: file.size,
-        fileSizeFormatted: formatFileSize(file.size),
-        pages: pages,
-        title: pdf.getTitle() || 'N/A',
-        author: pdf.getAuthor() || 'N/A',
-        creator: pdf.getCreator() || 'N/A',
-        creationDate: pdf.getCreationDate() || null,
-        modificationDate: pdf.getModificationDate() || null,
-      };
-
-      resultDiv.innerHTML = `
-        <table class="info-table">
-          <tr><th>文件名</th><td>${info.fileName}</td></tr>
-          <tr><th>页数</th><td><strong>${info.pageCount}</strong> 页</td></tr>
-          <tr><th>文件大小</th><td>${info.fileSizeFormatted} (${info.fileSize.toLocaleString()} bytes)</td></tr>
-          <tr><th>标题</th><td>${info.title || 'N/A'}</td></tr>
-          <tr><th>作者</th><td>${info.author || 'N/A'}</td></tr>
-          <tr><th>创建工具</th><td>${info.creator || 'N/A'}</td></tr>
-          ${info.creationDate ? `<tr><th>创建日期</th><td>${new Date(info.creationDate).toLocaleString()}</td></tr>` : ''}
-          ${info.modificationDate ? `<tr><th>修改日期</th><td>${new Date(info.modificationDate).toLocaleString()}</td></tr>` : ''}
-          <tr><th>页面尺寸</th><td>
-            <div style="max-height: 200px; overflow-y: auto;">
-              ${info.pages.map(p => `第${p.page}页: ${p.width} × ${p.height} pt`).join('<br>')}
-            </div>
-          </td></tr>
-        </table>
-      `;
-      resultDiv.style.display = 'block';
-      statusEl.textContent = '';
-      showToast('PDF信息读取完成', 'success');
-    } catch (error) {
-      statusEl.textContent = '❌ 读取PDF信息失败: ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast('读取失败: ' + error.message, 'error');
-    }
-  }
-})();
-
-// ==================== 7. Edit PDF ====================
+// ==================== 6. Edit PDF ====================
 (function() {
   // Configure pdf.js worker
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -1106,7 +1036,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   });
 })();
 
-// ==================== 8. Translate PDF ====================
+// ==================== 7. Translate PDF ====================
 (function() {
   const uploadArea = document.getElementById('translate-upload');
   const viewerDiv = document.getElementById('translate-viewer');
@@ -1138,15 +1068,44 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   uploadArea.style.display = 'block';
 
   // ============ Translation API (MyMemory) ============
-  async function translateText(text, from, to) {
+  const MYMEMORY_API_KEY = ''; // 可选：在 https://mymemory.translated.net 免费注册获取 key，可提升每日配额至 10000 字
+
+  async function translateText(text, from, to, retries = 2) {
     if (!text || !text.trim()) return '';
-    const langPair = from === 'auto' ? `en|${to}` : `${from}|${to}`;
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${langPair}`;
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error('翻译服务请求失败');
-    const data = await resp.json();
-    if (data.responseStatus !== 200) throw new Error('翻译服务返回错误');
-    return data.responseData.translatedText;
+    // 修复：auto 应该传给 API 让其自动检测，而非硬编码为 en
+    const langPair = `${from}|${to}`;
+    let url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${langPair}`;
+    if (MYMEMORY_API_KEY) {
+      url += `&key=${MYMEMORY_API_KEY}`;
+    }
+
+    let lastError;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) {
+          if (resp.status === 429 || resp.status === 403) {
+            throw new Error('翻译服务请求过于频繁，请稍后再试（免费API有每日配额限制）');
+          }
+          throw new Error(`翻译服务请求失败 (HTTP ${resp.status})`);
+        }
+        const data = await resp.json();
+        if (data.responseStatus !== 200) {
+          const errMsg = data.responseDetails || '未知错误';
+          throw new Error(`翻译服务返回错误: ${errMsg}`);
+        }
+        return data.responseData.translatedText;
+      } catch (err) {
+        lastError = err;
+        if (attempt < retries && (err.message.includes('过于频繁') || err.message.includes('429'))) {
+          // 指数退避重试
+          await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
+        } else if (attempt < retries) {
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+    }
+    throw lastError;
   }
 
   async function translateChunked(text, from, to) {
@@ -1163,9 +1122,10 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       remaining = remaining.slice(cut + 1);
     }
     const results = [];
-    for (const chunk of chunks) {
-      results.push(await translateText(chunk, from, to));
-      await new Promise(r => setTimeout(r, 200));
+    for (let i = 0; i < chunks.length; i++) {
+      results.push(await translateText(chunks[i], from, to));
+      // 增加延迟以减少被限流风险
+      await new Promise(r => setTimeout(r, 500));
     }
     return results.join(' ');
   }
@@ -1395,9 +1355,24 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       // Translate paragraph by paragraph
       const from = langFrom.value;
       const to = langTo.value;
+      let failCount = 0;
       for (let k = 0; k < paragraphs.length; k++) {
         statusEl.textContent = `翻译中 (${k + 1}/${paragraphs.length})...`;
-        paragraphs[k].translated = await translateChunked(paragraphs[k].text, from, to);
+        try {
+          paragraphs[k].translated = await translateChunked(paragraphs[k].text, from, to);
+        } catch (err) {
+          paragraphs[k].translated = `[翻译失败: ${err.message}]`;
+          failCount++;
+          // 如果连续失败超过3次，可能配额已耗尽，停止继续请求
+          if (failCount >= 3) {
+            statusEl.textContent = `⚠️ 连续翻译失败，可能已达免费API每日配额限制。已翻译 ${k + 1 - failCount}/${paragraphs.length} 段`;
+            break;
+          }
+          // 失败后等待更长时间再试下一段
+          await new Promise(r => setTimeout(r, 2000));
+        }
+        // 段落之间稍作延迟
+        await new Promise(r => setTimeout(r, 300));
       }
 
       // Render results on the right — preserving original format
@@ -1420,9 +1395,16 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       html += '</div>';
       resultInner.innerHTML = html;
 
-      statusEl.textContent = '✅ 全文翻译完成 — 左侧PDF原文，右侧中英对照';
-      statusEl.className = 'status-text success';
-      showToast(`全文翻译完成! 共 ${paragraphs.length} 段`, 'success');
+      const successCount = paragraphs.filter(p => p.translated && !p.translated.startsWith('[翻译失败')).length;
+      if (failCount > 0) {
+        statusEl.textContent = `⚠️ 翻译部分完成 — ${successCount}/${paragraphs.length} 段成功（免费API有每日配额限制）`;
+        statusEl.className = 'status-text';
+        showToast(`翻译部分完成: ${successCount}/${paragraphs.length} 段`, 'info');
+      } else {
+        statusEl.textContent = '✅ 全文翻译完成 — 左侧PDF原文，右侧中英对照';
+        statusEl.className = 'status-text success';
+        showToast(`全文翻译完成! 共 ${paragraphs.length} 段`, 'success');
+      }
     } catch (error) {
       resultInner.innerHTML = `<div style="padding:24px;color:var(--danger);">翻译失败: ${escapeHtml(error.message)}</div>`;
       statusEl.textContent = '❌ 翻译失败: ' + error.message;
