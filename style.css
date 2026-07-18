@@ -114,7 +114,13 @@ body {
   flex: 1;
   margin-left: 260px;
   padding: 40px 48px;
-  max-width: 960px;
+  max-width: 1200px;
+}
+
+@media (min-width: 1600px) {
+  .main {
+    max-width: 1400px;
+  }
 }
 
 /* ==================== Tool Panels ==================== */
