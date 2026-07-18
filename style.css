@@ -114,18 +114,21 @@ body {
   flex: 1;
   margin-left: 260px;
   padding: 40px 48px;
-  max-width: 1200px;
+  display: flex;
+  justify-content: center;
 }
 
 @media (min-width: 1600px) {
   .main {
-    max-width: 1400px;
+    padding: 48px 64px;
   }
 }
 
 /* ==================== Tool Panels ==================== */
 .tool-panel {
   display: none;
+  max-width: 960px;
+  width: 100%;
 }
 
 .tool-panel.active {
@@ -980,7 +983,8 @@ body {
   .nav-item { padding: 8px 12px; font-size: 13px; }
   .nav-item span { display: none; }
   .sidebar-footer { display: none; }
-  .main { margin-left: 0; padding: 24px 16px; }
+  .main { margin-left: 0; padding: 24px 16px; justify-content: flex-start; }
+  .tool-panel { max-width: none; }
   .split-options { grid-template-columns: 1fr; }
   .rotate-buttons { flex-direction: column; }
 }
