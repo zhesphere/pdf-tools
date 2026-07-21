@@ -488,16 +488,27 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
 // ==================== 5. Reorder Pages ====================
 (function() {
-  let reorderFile = null;
   const selectedDiv = document.getElementById('reorder-selected');
-  const reverseBtn = document.getElementById('reorder-reverse-btn');
-  const customBtn = document.getElementById('reorder-custom-btn');
-  const customInput = document.getElementById('reorder-custom');
+  const workspace = document.getElementById('reorder-workspace');
+  const thumbnailGrid = document.getElementById('reorder-thumbnail-grid');
+  const pageCountEl = document.getElementById('reorder-page-count');
+  const reverseBtn = document.getElementById('reorder-reverse-btn2');
+  const customInput = document.getElementById('reorder-custom2');
+  const customBtn = document.getElementById('reorder-custom-btn2');
+  const exportBtn = document.getElementById('reorder-export-btn');
   const statusEl = document.getElementById('reorder-status');
   const progressEl = document.getElementById('reorder-progress');
 
+  const state = {
+    pdfBytes: null,
+    totalPages: 0,
+    pageOrder: [],    // current order: [0, 1, 2, ...]  (zero-based indices)
+    thumbScale: 0.3,
+    reorderFile: null,
+  };
+
   function setFile(file) {
-    reorderFile = file;
+    state.reorderFile = file;
     selectedDiv.style.display = 'flex';
     selectedDiv.innerHTML = `
       📄 ${file.name} (${formatFileSize(file.size)})
@@ -507,43 +518,193 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
         </svg>
       </button>
     `;
-    document.getElementById('reorder-clear').addEventListener('click', () => {
-      reorderFile = null;
-      selectedDiv.style.display = 'none';
-      reverseBtn.disabled = true;
-      customBtn.disabled = true;
-    });
-    reverseBtn.disabled = false;
-    customBtn.disabled = false;
+    document.getElementById('reorder-clear').addEventListener('click', resetAll);
+    loadAndRender(file);
+  }
+
+  function resetAll() {
+    state.reorderFile = null;
+    state.pdfBytes = null;
+    state.totalPages = 0;
+    state.pageOrder = [];
+    selectedDiv.style.display = 'none';
+    workspace.style.display = 'none';
+    thumbnailGrid.innerHTML = '';
+    pageCountEl.textContent = '';
+    statusEl.textContent = '';
+    statusEl.className = 'status-text';
   }
 
   setupDragDrop('reorder-dropzone', 'reorder-input', setFile);
 
-  async function doReorder(order) {
+  async function loadAndRender(file) {
     progressEl.style.display = 'block';
-    statusEl.textContent = '处理中...';
+    statusEl.textContent = '加载PDF中...';
     statusEl.className = 'status-text';
-    reverseBtn.disabled = true;
-    customBtn.disabled = true;
 
     try {
-      const arrayBuffer = await reorderFile.arrayBuffer();
-      const sourcePdf = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-      const totalPages = sourcePdf.getPageCount();
+      const arrayBuffer = await file.arrayBuffer();
+      state.pdfBytes = arrayBuffer;
 
-      let newOrder;
-      if (order === 'reverse') {
-        newOrder = Array.from({ length: totalPages }, (_, i) => totalPages - 1 - i);
-      } else {
-        newOrder = order.split(',').map(n => parseInt(n.trim()) - 1);
-        if (newOrder.length !== totalPages) {
-          throw new Error('新顺序的页数与原PDF不符');
+      // Load with pdf-lib to get page count & dimensions
+      const pdfLibDoc = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
+      state.totalPages = pdfLibDoc.getPageCount();
+
+      // Load with pdf.js for rendering
+      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
+      const pdfDoc = await loadingTask.promise;
+
+      // Default order: 0, 1, 2, ...
+      state.pageOrder = Array.from({ length: state.totalPages }, (_, i) => i);
+
+      await renderThumbnails(pdfDoc);
+
+      workspace.style.display = 'block';
+      pageCountEl.textContent = `共 ${state.totalPages} 页 — 拖拽缩略图调整顺序`;
+      statusEl.textContent = '';
+      showToast(`已加载 ${state.totalPages} 页，可拖拽重排`, 'success');
+    } catch (error) {
+      statusEl.textContent = '❌ 加载PDF失败: ' + error.message;
+      statusEl.className = 'status-text error';
+      showToast('加载失败: ' + error.message, 'error');
+    } finally {
+      progressEl.style.display = 'none';
+    }
+  }
+
+  async function renderThumbnails(pdfDoc) {
+    thumbnailGrid.innerHTML = '';
+
+    // Calculate a reasonable thumb scale
+    const gridWidth = thumbnailGrid.clientWidth || 900;
+    const cols = Math.max(2, Math.floor(gridWidth / 176)); // ~160px cards + 16px gap
+    const cardWidth = (gridWidth - (cols - 1) * 16) / cols;
+    const thumbScale = cardWidth / 595; // A4 width ≈ 595pt
+
+    for (let i = 0; i < state.totalPages; i++) {
+      const origIdx = state.pageOrder[i];
+      const pageNum = origIdx + 1;
+
+      const pdfPage = await pdfDoc.getPage(pageNum);
+      const viewport = pdfPage.getViewport({ scale: thumbScale });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      canvas.className = 'thumb-canvas';
+      const ctx = canvas.getContext('2d');
+      await pdfPage.render({ canvasContext: ctx, viewport: viewport }).promise;
+
+      // Card wrapper
+      const card = document.createElement('div');
+      card.className = 'reorder-thumb-card';
+      card.draggable = true;
+      card.dataset.orderIndex = i; // position in current order
+
+      // Order badge (top-left circle)
+      const badge = document.createElement('div');
+      badge.className = 'thumb-badge';
+      badge.textContent = i + 1;
+      card.appendChild(badge);
+
+      card.appendChild(canvas);
+
+      // Page number label
+      const label = document.createElement('div');
+      label.className = 'thumb-page-num';
+      label.textContent = `第 ${pageNum} 页`;
+      card.appendChild(label);
+
+      // ===== Drag events =====
+      card.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        card.classList.add('dragging');
+        e.dataTransfer.setData('text/plain', String(i));
+      });
+
+      card.addEventListener('dragend', () => {
+        card.classList.remove('dragging');
+        // Remove all drag-over highlights
+        document.querySelectorAll('.reorder-thumb-card.drag-over').forEach(c => c.classList.remove('drag-over'));
+      });
+
+      card.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        card.classList.add('drag-over');
+      });
+
+      card.addEventListener('dragleave', () => {
+        card.classList.remove('drag-over');
+      });
+
+      card.addEventListener('drop', (e) => {
+        e.preventDefault();
+        card.classList.remove('drag-over');
+        const fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
+        const toIdx = parseInt(card.dataset.orderIndex);
+        if (!isNaN(fromIdx) && !isNaN(toIdx) && fromIdx !== toIdx) {
+          // Reorder the pageOrder array
+          const [moved] = state.pageOrder.splice(fromIdx, 1);
+          state.pageOrder.splice(toIdx, 0, moved);
+          renderThumbnails(pdfDoc);
         }
-      }
+      });
 
+      thumbnailGrid.appendChild(card);
+    }
+  }
+
+  // ============ Reverse ============
+  reverseBtn.addEventListener('click', async () => {
+    state.pageOrder.reverse();
+    const loadingTask = pdfjsLib.getDocument({ data: state.pdfBytes.slice(0) });
+    const pdfDoc = await loadingTask.promise;
+    await renderThumbnails(pdfDoc);
+    showToast('页面顺序已反转', 'info');
+  });
+
+  // ============ Custom text order ============
+  customBtn.addEventListener('click', async () => {
+    const val = customInput.value.trim();
+    if (!val) return showToast('请输入自定义顺序', 'error');
+
+    try {
+      const parts = val.split(',').map(n => parseInt(n.trim()));
+      if (parts.length !== state.totalPages) {
+        return showToast(`页数不符: 需要 ${state.totalPages} 个数字，输入了 ${parts.length} 个`, 'error');
+      }
+      if (parts.some(n => isNaN(n) || n < 1 || n > state.totalPages)) {
+        return showToast(`页码必须在 1-${state.totalPages} 之间`, 'error');
+      }
+      state.pageOrder = parts.map(n => n - 1); // convert to 0-based
+      const loadingTask = pdfjsLib.getDocument({ data: state.pdfBytes.slice(0) });
+      const pdfDoc = await loadingTask.promise;
+      await renderThumbnails(pdfDoc);
+      showToast('自定义顺序已应用', 'success');
+    } catch (err) {
+      showToast('格式错误: ' + err.message, 'error');
+    }
+  });
+
+  // Also allow Enter key in the custom input
+  customInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') customBtn.click();
+  });
+
+  // ============ Export ============
+  exportBtn.addEventListener('click', async () => {
+    progressEl.style.display = 'block';
+    statusEl.textContent = '生成PDF中...';
+    statusEl.className = 'status-text';
+    exportBtn.disabled = true;
+
+    try {
+      const sourcePdf = await PDFLib.PDFDocument.load(state.pdfBytes.slice(0), { ignoreEncryption: true });
       const newPdf = await PDFLib.PDFDocument.create();
-      for (const idx of newOrder) {
-        const [copiedPage] = await newPdf.copyPages(sourcePdf, [idx]);
+
+      for (const pageIdx of state.pageOrder) {
+        const [copiedPage] = await newPdf.copyPages(sourcePdf, [pageIdx]);
         newPdf.addPage(copiedPage);
       }
 
@@ -554,18 +715,14 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       statusEl.className = 'status-text success';
       showToast('重排完成! 下载已开始', 'success');
     } catch (error) {
-      statusEl.textContent = '❌ ' + error.message;
+      statusEl.textContent = '❌ 导出失败: ' + error.message;
       statusEl.className = 'status-text error';
-      showToast(error.message, 'error');
+      showToast('导出失败: ' + error.message, 'error');
     } finally {
       progressEl.style.display = 'none';
-      reverseBtn.disabled = !reorderFile;
-      customBtn.disabled = !reorderFile;
+      exportBtn.disabled = false;
     }
-  }
-
-  reverseBtn.addEventListener('click', () => doReorder('reverse'));
-  customBtn.addEventListener('click', () => doReorder(customInput.value.trim()));
+  });
 })();
 
 // ==================== 6. Edit PDF ====================

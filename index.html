@@ -267,7 +267,7 @@
       <section id="tool-reorder" class="tool-panel">
         <div class="tool-header">
           <h1>重排页面</h1>
-          <p>反转页面顺序或自定义新顺序。</p>
+          <p>上传PDF后可拖拽缩略图调整页面顺序，也支持反转和自定义顺序。</p>
         </div>
 
         <div class="upload-area single" id="reorder-upload">
@@ -282,16 +282,39 @@
           <div class="selected-file" id="reorder-selected" style="display:none;"></div>
         </div>
 
-        <div class="option-card">
-          <h3>🔄 反转页面顺序</h3>
-          <p>完全反转PDF页面的排列顺序（最后一页变第一页）</p>
-          <button class="btn-primary" id="reorder-reverse-btn" disabled>反转页面顺序</button>
-        </div>
-        <div class="option-card">
-          <h3>🔢 自定义顺序</h3>
-          <p>输入新的页面排列顺序(逗号分隔)，例如: 3,1,2</p>
-          <input type="text" id="reorder-custom" class="text-input" placeholder="例: 3,1,2 (第3页在先)">
-          <button class="btn-primary" id="reorder-custom-btn" disabled>重新排序</button>
+        <!-- Thumbnail reorder area -->
+        <div id="reorder-workspace" style="display:none;">
+          <div class="reorder-toolbar">
+            <div class="reorder-info">
+              <span id="reorder-page-count"></span>
+            </div>
+            <div class="reorder-actions">
+              <button class="btn-primary btn-sm" id="reorder-reverse-btn2">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 014-4h14"/>
+                  <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 01-4 4H3"/>
+                </svg>
+                反转顺序
+              </button>
+              <div class="reorder-custom-inline">
+                <input type="text" id="reorder-custom2" class="text-input text-input-sm" placeholder="自定义: 3,1,2">
+                <button class="btn-primary btn-sm" id="reorder-custom-btn2">应用</button>
+              </div>
+              <button class="btn-primary btn-sm" id="reorder-export-btn">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                导出重排PDF
+              </button>
+            </div>
+          </div>
+
+          <div class="reorder-thumbnail-grid" id="reorder-thumbnail-grid">
+            <!-- Thumbnails rendered here -->
+          </div>
+
+          <p class="reorder-hint">💡 拖拽缩略图即可调整页面顺序 · 新顺序号会实时更新</p>
         </div>
 
         <div class="progress-bar" id="reorder-progress" style="display:none;">
