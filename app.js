@@ -557,10 +557,11 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       // Default order: 0, 1, 2, ...
       state.pageOrder = Array.from({ length: state.totalPages }, (_, i) => i);
 
-      await renderThumbnails(pdfDoc);
-
+      // Show workspace first so thumbnail grid has layout dimensions
       workspace.style.display = 'block';
       pageCountEl.textContent = `共 ${state.totalPages} 页 — 拖拽缩略图调整顺序`;
+
+      await renderThumbnails(pdfDoc);
       statusEl.textContent = '';
       showToast(`已加载 ${state.totalPages} 页，可拖拽重排`, 'success');
     } catch (error) {
@@ -577,8 +578,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
     // Calculate a reasonable thumb scale
     const gridWidth = thumbnailGrid.clientWidth || 900;
-    const cols = Math.max(2, Math.floor(gridWidth / 176)); // ~160px cards + 16px gap
-    const cardWidth = (gridWidth - (cols - 1) * 16) / cols;
+    const cols = Math.max(2, Math.floor(gridWidth / 176));
+    const cardWidth = Math.max(120, (gridWidth - (cols - 1) * 16) / cols);
     const thumbScale = cardWidth / 595; // A4 width ≈ 595pt
 
     for (let i = 0; i < state.totalPages; i++) {
