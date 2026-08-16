@@ -1,0 +1,17 @@
+{
+  "name": "PDF Tools · Orbitvo Tools",
+  "short_name": "PDF Tools",
+  "description": "隐私优先的本地 PDF 页面整理工具",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

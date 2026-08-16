@@ -1,35 +1,31 @@
-// ==================== Utility Functions ====================
+import * as PDFLib from 'pdf-lib';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import JSZip from 'jszip';
+import {
+  assessDocumentRisk,
+  createFileFingerprint,
+  formatFileSize,
+  parsePageRange,
+  validatePdfFile,
+} from './src/core.js';
+import {
+  clearLocalSession,
+  loadRecipe,
+  loadSettings,
+  saveRecipe,
+  saveSettings,
+} from './src/session-store.js';
+import {
+  extractPdfPages,
+  mergePdfs,
+  removePdfPages,
+  reorderPdfPages,
+  rotatePdfPages,
+  splitPdfPages,
+} from './src/pdf-operations.js';
 
-function formatFileSize(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
-}
-
-function parsePageRange(rangeStr, totalPages) {
-  const result = new Set();
-  if (!rangeStr || rangeStr.trim() === '') return [];
-
-  const parts = rangeStr.split(',');
-  for (let part of parts) {
-    part = part.trim();
-    if (part.includes('-')) {
-      const [start, end] = part.split('-').map(n => parseInt(n.trim()));
-      if (!isNaN(start) && !isNaN(end)) {
-        for (let i = Math.max(1, start); i <= Math.min(end, totalPages); i++) {
-          result.add(i);
-        }
-      }
-    } else {
-      const num = parseInt(part);
-      if (!isNaN(num) && num >= 1 && num <= totalPages) {
-        result.add(num);
-      }
-    }
-  }
-
-  return Array.from(result).sort((a, b) => a - b);
-}
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 function downloadBlob(blob, filename) {
   const link = document.createElement('a');
@@ -38,7 +34,7 @@ function downloadBlob(blob, filename) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(link.href);
+  window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
 function downloadPdf(pdfBytes, filename) {
@@ -46,19 +42,62 @@ function downloadPdf(pdfBytes, filename) {
   downloadBlob(blob, filename);
 }
 
+function warnAboutFileRisk(files) {
+  const largest = [...files].sort((a, b) => b.size - a.size)[0];
+  if (!largest) return;
+  const risk = assessDocumentRisk({
+    fileSize: largest.size,
+    mobile: window.matchMedia('(max-width: 768px)').matches,
+  });
+  if (risk.level === 'warning') showToast(risk.message, 'info', 6000);
+}
+
 // ==================== Navigation ====================
 const navItems = document.querySelectorAll('.nav-item');
 const toolPanels = document.querySelectorAll('.tool-panel');
 
 navItems.forEach(item => {
+  item.setAttribute('aria-pressed', item.classList.contains('active') ? 'true' : 'false');
   item.addEventListener('click', () => {
-    navItems.forEach(n => n.classList.remove('active'));
+    navItems.forEach(n => {
+      n.classList.remove('active');
+      n.setAttribute('aria-pressed', 'false');
+    });
     item.classList.add('active');
+    item.setAttribute('aria-pressed', 'true');
     const tool = item.dataset.tool;
     toolPanels.forEach(p => p.classList.remove('active'));
     document.getElementById(`tool-${tool}`).classList.add('active');
   });
 });
+
+// ==================== App Shell & Privacy ====================
+const settings = loadSettings();
+document.documentElement.dataset.theme = settings.theme
+  || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+
+document.getElementById('theme-toggle').addEventListener('click', () => {
+  const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = theme;
+  saveSettings({ ...loadSettings(), theme });
+});
+
+const privacyDialog = document.getElementById('privacy-dialog');
+const openPrivacyDialog = () => privacyDialog.showModal();
+document.getElementById('privacy-open').addEventListener('click', openPrivacyDialog);
+document.getElementById('privacy-footer-open').addEventListener('click', openPrivacyDialog);
+document.getElementById('privacy-close').addEventListener('click', () => privacyDialog.close());
+document.getElementById('clear-local-data').addEventListener('click', () => {
+  clearLocalSession();
+  document.documentElement.dataset.theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  showToast('本地设置与恢复记录已清除', 'success');
+});
+
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
 
 // ==================== Toast Notifications ====================
 function showToast(message, type = 'info', duration = 3000) {
@@ -80,7 +119,17 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const dropzone = document.getElementById(dropzoneId);
   const input = document.getElementById(inputId);
 
+  dropzone.setAttribute('role', 'button');
+  dropzone.setAttribute('tabindex', '0');
+  dropzone.setAttribute('aria-controls', inputId);
+
   dropzone.addEventListener('click', () => input.click());
+  dropzone.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      input.click();
+    }
+  });
 
   dropzone.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -94,7 +143,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   dropzone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropzone.classList.remove('drag-over');
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf' || f.name.endsWith('.pdf'));
+    const files = Array.from(e.dataTransfer.files).filter(file => validatePdfFile(file).ok);
     if (files.length === 0) {
       showToast('请选择PDF文件', 'error');
       return;
@@ -102,13 +151,21 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     if (!multiple && files.length > 1) {
       showToast('此工具仅支持单个PDF文件', 'info');
     }
+    warnAboutFileRisk(files);
     callback(multiple ? files : files[0]);
   });
 
   input.addEventListener('change', () => {
     const files = Array.from(input.files);
     if (files.length === 0) return;
-    callback(multiple ? files : files[0]);
+    const validFiles = files.filter(file => validatePdfFile(file).ok);
+    if (validFiles.length === 0) {
+      showToast(validatePdfFile(files[0]).message, 'error');
+      input.value = '';
+      return;
+    }
+    warnAboutFileRisk(validFiles);
+    callback(multiple ? validFiles : validFiles[0]);
     input.value = '';
   });
 }
@@ -137,11 +194,15 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
         </svg>
         <span class="file-name">${file.name}</span>
         <span class="file-size">${formatFileSize(file.size)}</span>
-        <button class="remove-btn" data-index="${index}">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
+        <span class="file-actions">
+          <button class="move-file-btn" data-index="${index}" data-direction="-1" aria-label="将 ${file.name} 前移" ${index === 0 ? 'disabled' : ''}>↑</button>
+          <button class="move-file-btn" data-index="${index}" data-direction="1" aria-label="将 ${file.name} 后移" ${index === mergeFiles.length - 1 ? 'disabled' : ''}>↓</button>
+          <button class="remove-btn" data-index="${index}" aria-label="移除 ${file.name}">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </span>
       `;
       fileList.appendChild(item);
     });
@@ -173,6 +234,17 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     });
 
     // Remove buttons
+    document.querySelectorAll('#merge-file-list .move-file-btn').forEach(btn => {
+      btn.addEventListener('click', event => {
+        event.stopPropagation();
+        const from = Number.parseInt(btn.dataset.index, 10);
+        const to = from + Number.parseInt(btn.dataset.direction, 10);
+        if (to < 0 || to >= mergeFiles.length) return;
+        [mergeFiles[from], mergeFiles[to]] = [mergeFiles[to], mergeFiles[from]];
+        renderFileList();
+      });
+    });
+
     document.querySelectorAll('#merge-file-list .remove-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -196,16 +268,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     mergeBtn.disabled = true;
 
     try {
-      const mergedPdf = await PDFLib.PDFDocument.create();
-
-      for (const file of mergeFiles) {
-        const arrayBuffer = await file.arrayBuffer();
-        const pdf = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-        const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
-        copiedPages.forEach(page => mergedPdf.addPage(page));
-      }
-
-      const pdfBytes = await mergedPdf.save();
+      const pdfBytes = await mergePdfs(await Promise.all(mergeFiles.map(file => file.arrayBuffer())));
       downloadPdf(pdfBytes, 'merged.pdf');
 
       statusEl.textContent = '✅ 下载已开始';
@@ -237,7 +300,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     selectedDiv.style.display = 'flex';
     selectedDiv.innerHTML = `
       📄 ${file.name} (${formatFileSize(file.size)})
-      <button class="remove-file" id="split-remove">
+      <button class="remove-file" id="split-remove" aria-label="移除当前文件">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
@@ -267,18 +330,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       const sourcePdf = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
       const totalPages = sourcePdf.getPageCount();
       const pageNumbers = parsePageRange(pagesInput.value.trim(), totalPages);
-
-      if (pageNumbers.length === 0) {
-        throw new Error('无效的页码范围');
-      }
-
-      const newPdf = await PDFLib.PDFDocument.create();
-      for (const pageNum of pageNumbers) {
-        const [copiedPage] = await newPdf.copyPages(sourcePdf, [pageNum - 1]);
-        newPdf.addPage(copiedPage);
-      }
-
-      const pdfBytes = await newPdf.save();
+      const pdfBytes = await extractPdfPages(arrayBuffer, pageNumbers);
       downloadPdf(pdfBytes, 'extracted.pdf');
 
       statusEl.textContent = '✅ 下载已开始';
@@ -304,24 +356,19 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
     try {
       const arrayBuffer = await splitFile.arrayBuffer();
-      const sourcePdf = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-      const totalPages = sourcePdf.getPageCount();
+      const pages = await splitPdfPages(arrayBuffer);
       const zip = new JSZip();
 
-      for (let i = 0; i < totalPages; i++) {
-        const newPdf = await PDFLib.PDFDocument.create();
-        const [copiedPage] = await newPdf.copyPages(sourcePdf, [i]);
-        newPdf.addPage(copiedPage);
-        const pageBytes = await newPdf.save();
-        zip.file(`page_${String(i + 1).padStart(3, '0')}.pdf`, pageBytes);
-      }
+      pages.forEach((pageBytes, index) => {
+        zip.file(`page_${String(index + 1).padStart(3, '0')}.pdf`, pageBytes);
+      });
 
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       downloadBlob(zipBlob, 'split_pages.zip');
 
-      statusEl.textContent = '✅ 下载已开始（共 ' + totalPages + ' 页）';
+      statusEl.textContent = '✅ 下载已开始（共 ' + pages.length + ' 页）';
       statusEl.className = 'status-text success';
-      showToast(`拆分完成! ${totalPages} 个页面已打包下载`, 'success');
+      showToast(`拆分完成! ${pages.length} 个页面已打包下载`, 'success');
     } catch (error) {
       statusEl.textContent = '❌ 拆分PDF失败: ' + error.message;
       statusEl.className = 'status-text error';
@@ -348,7 +395,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     selectedDiv.style.display = 'flex';
     selectedDiv.innerHTML = `
       📄 ${file.name} (${formatFileSize(file.size)})
-      <button class="remove-file" id="remove-clear">
+      <button class="remove-file" id="remove-clear" aria-label="移除当前文件">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
@@ -374,21 +421,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       const arrayBuffer = await removeFile.arrayBuffer();
       const sourcePdf = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
       const totalPages = sourcePdf.getPageCount();
-      const pagesToRemove = new Set(parsePageRange(pagesInput.value.trim(), totalPages));
-      const newPdf = await PDFLib.PDFDocument.create();
-
-      for (let i = 0; i < totalPages; i++) {
-        if (!pagesToRemove.has(i + 1)) {
-          const [copiedPage] = await newPdf.copyPages(sourcePdf, [i]);
-          newPdf.addPage(copiedPage);
-        }
-      }
-
-      if (newPdf.getPageCount() === 0) {
-        throw new Error('删除后PDF将没有页面');
-      }
-
-      const pdfBytes = await newPdf.save();
+      const pagesToRemove = parsePageRange(pagesInput.value.trim(), totalPages);
+      const pdfBytes = await removePdfPages(arrayBuffer, pagesToRemove);
       downloadPdf(pdfBytes, 'pages_removed.pdf');
 
       statusEl.textContent = '✅ 下载已开始';
@@ -430,7 +464,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     selectedDiv.style.display = 'flex';
     selectedDiv.innerHTML = `
       📄 ${file.name} (${formatFileSize(file.size)})
-      <button class="remove-file" id="rotate-clear">
+      <button class="remove-file" id="rotate-clear" aria-label="移除当前文件">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
@@ -459,17 +493,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
       const pagesToRotate = pagesInput.value.trim()
         ? parsePageRange(pagesInput.value.trim(), totalPages)
-        : null;
-
-      for (let i = 0; i < totalPages; i++) {
-        if (!pagesToRotate || pagesToRotate.includes(i + 1)) {
-          const page = sourcePdf.getPage(i);
-          const currentRotation = page.getRotation().angle;
-          page.setRotation(PDFLib.degrees((currentRotation + selectedAngle) % 360));
-        }
-      }
-
-      const pdfBytes = await sourcePdf.save();
+        : [];
+      const pdfBytes = await rotatePdfPages(arrayBuffer, selectedAngle, pagesToRotate);
       downloadPdf(pdfBytes, 'rotated.pdf');
 
       statusEl.textContent = '✅ 下载已开始';
@@ -505,14 +530,20 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     pageOrder: [],    // current order: [0, 1, 2, ...]  (zero-based indices)
     thumbScale: 0.3,
     reorderFile: null,
+    fingerprint: '',
   };
+
+  function persistPageOrder() {
+    if (!state.fingerprint || state.pageOrder.length === 0) return;
+    saveRecipe({ tool: 'reorder', fingerprint: state.fingerprint, pageOrder: state.pageOrder });
+  }
 
   function setFile(file) {
     state.reorderFile = file;
     selectedDiv.style.display = 'flex';
     selectedDiv.innerHTML = `
       📄 ${file.name} (${formatFileSize(file.size)})
-      <button class="remove-file" id="reorder-clear">
+      <button class="remove-file" id="reorder-clear" aria-label="移除当前文件">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
@@ -527,6 +558,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     state.pdfBytes = null;
     state.totalPages = 0;
     state.pageOrder = [];
+    state.fingerprint = '';
     selectedDiv.style.display = 'none';
     workspace.style.display = 'none';
     thumbnailGrid.innerHTML = '';
@@ -545,6 +577,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     try {
       const arrayBuffer = await file.arrayBuffer();
       state.pdfBytes = arrayBuffer;
+      state.fingerprint = createFileFingerprint(file);
 
       // Load with pdf-lib to get page count & dimensions
       const pdfLibDoc = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
@@ -556,6 +589,23 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
       // Default order: 0, 1, 2, ...
       state.pageOrder = Array.from({ length: state.totalPages }, (_, i) => i);
+      const savedRecipe = loadRecipe(state.fingerprint);
+      const savedOrder = savedRecipe?.tool === 'reorder' ? savedRecipe.pageOrder : null;
+      const isValidSavedOrder = Array.isArray(savedOrder)
+        && savedOrder.length === state.totalPages
+        && new Set(savedOrder).size === state.totalPages
+        && savedOrder.every(index => Number.isInteger(index) && index >= 0 && index < state.totalPages);
+      if (isValidSavedOrder) {
+        state.pageOrder = savedOrder;
+        showToast('已恢复最近 24 小时内的页面顺序', 'info', 5000);
+      }
+
+      const risk = assessDocumentRisk({
+        fileSize: file.size,
+        pageCount: state.totalPages,
+        mobile: window.matchMedia('(max-width: 768px)').matches,
+      });
+      if (risk.level === 'warning') showToast(risk.message, 'info', 6000);
 
       // Show workspace first so thumbnail grid has layout dimensions
       workspace.style.display = 'block';
@@ -616,6 +666,36 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       label.textContent = `第 ${pageNum} 页`;
       card.appendChild(label);
 
+      const actions = document.createElement('div');
+      actions.className = 'thumb-actions';
+      const previousButton = document.createElement('button');
+      previousButton.type = 'button';
+      previousButton.textContent = '←';
+      previousButton.disabled = i === 0;
+      previousButton.setAttribute('aria-label', `将第 ${pageNum} 页前移`);
+      const nextButton = document.createElement('button');
+      nextButton.type = 'button';
+      nextButton.textContent = '→';
+      nextButton.disabled = i === state.totalPages - 1;
+      nextButton.setAttribute('aria-label', `将第 ${pageNum} 页后移`);
+      actions.append(previousButton, nextButton);
+      card.appendChild(actions);
+
+      const movePage = async targetIndex => {
+        const [moved] = state.pageOrder.splice(i, 1);
+        state.pageOrder.splice(targetIndex, 0, moved);
+        persistPageOrder();
+        await renderThumbnails(pdfDoc);
+      };
+      previousButton.addEventListener('click', event => {
+        event.stopPropagation();
+        movePage(i - 1);
+      });
+      nextButton.addEventListener('click', event => {
+        event.stopPropagation();
+        movePage(i + 1);
+      });
+
       // ===== Drag events =====
       card.addEventListener('dragstart', (e) => {
         e.dataTransfer.effectAllowed = 'move';
@@ -648,6 +728,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
           // Reorder the pageOrder array
           const [moved] = state.pageOrder.splice(fromIdx, 1);
           state.pageOrder.splice(toIdx, 0, moved);
+          persistPageOrder();
           renderThumbnails(pdfDoc);
         }
       });
@@ -659,6 +740,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   // ============ Reverse ============
   reverseBtn.addEventListener('click', async () => {
     state.pageOrder.reverse();
+    persistPageOrder();
     const loadingTask = pdfjsLib.getDocument({ data: state.pdfBytes.slice(0) });
     const pdfDoc = await loadingTask.promise;
     await renderThumbnails(pdfDoc);
@@ -678,7 +760,11 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       if (parts.some(n => isNaN(n) || n < 1 || n > state.totalPages)) {
         return showToast(`页码必须在 1-${state.totalPages} 之间`, 'error');
       }
+      if (new Set(parts).size !== state.totalPages) {
+        return showToast('每个页码必须且只能出现一次', 'error');
+      }
       state.pageOrder = parts.map(n => n - 1); // convert to 0-based
+      persistPageOrder();
       const loadingTask = pdfjsLib.getDocument({ data: state.pdfBytes.slice(0) });
       const pdfDoc = await loadingTask.promise;
       await renderThumbnails(pdfDoc);
@@ -701,15 +787,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     exportBtn.disabled = true;
 
     try {
-      const sourcePdf = await PDFLib.PDFDocument.load(state.pdfBytes.slice(0), { ignoreEncryption: true });
-      const newPdf = await PDFLib.PDFDocument.create();
-
-      for (const pageIdx of state.pageOrder) {
-        const [copiedPage] = await newPdf.copyPages(sourcePdf, [pageIdx]);
-        newPdf.addPage(copiedPage);
-      }
-
-      const pdfBytes = await newPdf.save();
+      const pdfBytes = await reorderPdfPages(state.pdfBytes.slice(0), state.pageOrder);
       downloadPdf(pdfBytes, 'reordered.pdf');
 
       statusEl.textContent = '✅ 下载已开始';
@@ -728,9 +806,6 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
 // ==================== 6. Edit PDF ====================
 (function() {
-  // Configure pdf.js worker
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-
   const uploadArea = document.getElementById('edit-upload');
   const editorDiv = document.getElementById('edit-editor');
   const pagesContainer = document.getElementById('edit-pages-container');
@@ -1212,6 +1287,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const progressEl = document.getElementById('translate-progress');
   const langFrom = document.getElementById('translate-lang-from');
   const langTo = document.getElementById('translate-lang-to');
+  const consentCheck = document.getElementById('translate-consent');
 
   const state = {
     pdfBytes: null,
@@ -1230,6 +1306,9 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
   async function translateText(text, from, to, retries = 2) {
     if (!text || !text.trim()) return '';
+    if (!consentCheck.checked) {
+      throw new Error('请先确认联网翻译的隐私说明');
+    }
     // 修复：auto 应该传给 API 让其自动检测，而非硬编码为 en
     const langPair = `${from}|${to}`;
     let url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${langPair}`;
@@ -1376,11 +1455,12 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
         textLayerDiv.style.width = viewport.width + 'px';
         textLayerDiv.style.height = viewport.height + 'px';
         const textContent = await pdfPage.getTextContent();
-        await pdfjsLib.renderTextLayer({
+        const textLayer = new pdfjsLib.TextLayer({
           textContentSource: textContent,
           container: textLayerDiv,
           viewport: viewport,
         });
+        await textLayer.render();
         textLayerDiv.dataset.pageIndex = i;
         card.appendChild(textLayerDiv);
       }

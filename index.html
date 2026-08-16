@@ -3,8 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PDF Tools - 在线PDF工具箱</title>
-  <link rel="icon" type="image/webp" href="https://zsstoposs.oss-cn-hangzhou.aliyuncs.com/images/img_v3_0213l_40627968-8cde-4455-8c46-6d244d1f9c4g.webp">
+  <meta name="description" content="在浏览器本地合并、拆分、删除、旋转和重排 PDF 页面。原文件默认不离开设备。">
+  <meta name="theme-color" content="#4f46e5">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="PDF Tools · Orbitvo Tools">
+  <meta property="og:description" content="隐私优先的本地 PDF 页面整理工具。">
+  <title>PDF Tools · Orbitvo Tools</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -74,13 +80,28 @@
       </nav>
 
       <div class="sidebar-footer">
-        <p>所有文件在浏览器本地处理</p>
-        <p>无需上传服务器，安全私密</p>
+        <p>页面整理默认在本地完成</p>
+        <p>联网翻译会在操作前提示</p>
       </div>
     </aside>
 
     <!-- Main Content -->
     <main class="main">
+      <div class="main-shell">
+        <header class="family-bar">
+          <a href="https://orbitvo.com" rel="home">Orbitvo Tools</a>
+          <span aria-hidden="true">/</span>
+          <span>PDF</span>
+          <button class="icon-button" id="theme-toggle" type="button" aria-label="切换深浅色" title="切换深浅色">◐</button>
+        </header>
+
+        <section class="trust-banner" aria-label="文件处理说明">
+          <div>
+            <strong>原文件默认不离开你的设备</strong>
+            <span>页面整理在浏览器本地完成；只有你主动启用翻译时，待翻译文字才会发送给第三方服务。</span>
+          </div>
+          <button class="btn-link" id="privacy-open" type="button">查看隐私边界</button>
+        </section>
       <!-- Merge PDF Tool -->
       <section id="tool-merge" class="tool-panel active">
         <div class="tool-header">
@@ -389,6 +410,14 @@
         </div>
 
         <div class="upload-area single" id="translate-upload">
+          <div class="network-notice" role="note">
+            <strong>可选联网能力</strong>
+            <p>PDF 文件仍在本地解析，但你选择或要求全文翻译的文字会发送至 MyMemory。扫描件不会自动 OCR。</p>
+            <label class="consent-row">
+              <input type="checkbox" id="translate-consent">
+              <span>我了解并同意发送待翻译文字</span>
+            </label>
+          </div>
           <div class="upload-zone" id="translate-dropzone">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -453,7 +482,7 @@
         <div class="translate-popup" id="translate-popup" style="display:none;">
           <div class="translate-popup-header">
             <span class="translate-popup-label">翻译</span>
-            <button class="translate-popup-close" id="translate-popup-close">×</button>
+            <button class="translate-popup-close" id="translate-popup-close" aria-label="关闭翻译结果">×</button>
           </div>
           <div class="translate-popup-original" id="translate-popup-original"></div>
           <div class="translate-popup-divider"></div>
@@ -465,16 +494,53 @@
         </div>
         <p class="status-text" id="translate-status"></p>
       </section>
+
+        <footer class="site-footer">
+          <div>
+            <strong>PDF Tools</strong>
+            <span>Orbitvo Tools 家族 · 页面整理默认本地处理</span>
+          </div>
+          <nav aria-label="页脚导航">
+            <button class="btn-link" id="privacy-footer-open" type="button">隐私与限制</button>
+            <a href="https://orbitvo.com">返回 Orbitvo</a>
+          </nav>
+        </footer>
+      </div>
     </main>
   </div>
 
   <!-- Toast notification -->
-  <div class="toast-container" id="toast-container"></div>
+  <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
-  <!-- PDF processing libraries (browser) -->
-  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="app.js"></script>
+  <dialog class="privacy-dialog" id="privacy-dialog" aria-labelledby="privacy-title">
+    <div class="dialog-header">
+      <div>
+        <span class="eyebrow">PRIVACY BY DEFAULT</span>
+        <h2 id="privacy-title">隐私与能力边界</h2>
+      </div>
+      <button class="icon-button" id="privacy-close" type="button" aria-label="关闭">×</button>
+    </div>
+    <div class="dialog-content">
+      <section>
+        <h3>本地页面工具</h3>
+        <p>合并、拆分、删除、旋转、重排和轻量标注都在当前浏览器内处理。应用不会把原 PDF 上传到 Orbitvo 服务器。</p>
+      </section>
+      <section>
+        <h3>联网翻译</h3>
+        <p>翻译是可选功能。只有勾选同意并实际翻译时，待翻译文字才会发送至 MyMemory；PDF 文件本身不会发送。</p>
+      </section>
+      <section>
+        <h3>本地恢复</h3>
+        <p>应用可在本机保存主题设置与最近 24 小时的操作配方，例如文件名、大小和页面顺序；不会保存 PDF 内容。</p>
+      </section>
+      <section>
+        <h3>文件限制</h3>
+        <p>浏览器没有统一文件上限。超大或超多页 PDF 可能因设备内存不足而失败；应用会提示风险，但不会声称“无限处理”。</p>
+      </section>
+      <button class="btn-secondary" id="clear-local-data" type="button">清除本地设置与恢复记录</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
 </body>
 </html>
