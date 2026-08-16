@@ -1,4 +1,4 @@
-const CACHE_NAME = 'orbitvo-pdf-tools-v2';
+const CACHE_NAME = 'orbitvo-pdf-tools-v3';
 const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/favicon.svg'];
 
 self.addEventListener('install', event => {
