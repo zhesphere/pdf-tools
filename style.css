@@ -108,6 +108,8 @@ body {
   transition: all var(--transition);
   text-align: left;
   width: 100%;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .nav-item:hover {

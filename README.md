@@ -45,4 +45,6 @@ npm run check
 
 ## 部署准备
 
-项目可作为纯静态 Vite 站点部署。`vercel.json` 已声明构建目录和基础安全响应头。本阶段不会部署、修改 DNS 或切换域名；计划在内容与验收全部完成后，将正式域名切换为 `pdf.orbitvo.com`，届时再补齐 canonical、OG URL 和 sitemap 的正式地址。
+项目必须先执行 Vite 构建，再发布 `dist/`；不能直接把仓库源码目录作为静态站点，否则浏览器无法解析 npm 模块。GitHub Pages 工作流会在 `main` 更新后执行测试、构建并发布产物，`vercel.json` 也已声明构建目录和基础安全响应头。
+
+当前预览域名仍为 `pdf.zsphere.top`。在内容与验收全部完成前不会修改 DNS 或切换域名；届时再将正式域名调整为 `pdf.orbitvo.com`，并补齐 canonical、OG URL 和 sitemap 的正式地址。
