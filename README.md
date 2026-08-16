@@ -49,4 +49,4 @@ npm run check
 
 仓库仍启用 GitHub Pages 的旧分支发布器，因此工作流会先等待旧发布完成，再发布并校验 Vite 产物，避免源码覆盖生产构建。若以后在仓库设置中将 Pages Source 切换为 GitHub Actions，工作流会自动跳过不存在的旧发布。
 
-正式域名为 `pdf.orbitvo.com`，canonical、OG URL、robots 和 sitemap 统一使用该地址。迁移验收期间，旧的 `pdf.zsphere.top` 仅作为 GitHub Pages 回退入口保留；是否移除旧域名需在新域名的 DNS、TLS 与交互验收完成后决定。
+正式域名为 `pdf.orbitvo.com`，由 Vercel 托管，canonical、OG URL、robots 和 sitemap 统一使用该地址。DNS、TLS、HTTP 与移动端导航已经完成生产验收。旧的 `pdf.zsphere.top` 暂时仅作为 GitHub Pages 回退入口保留；移除旧域名需单独确认。
