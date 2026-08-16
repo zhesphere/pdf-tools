@@ -47,4 +47,6 @@ npm run check
 
 项目必须先执行 Vite 构建，再发布 `dist/`；不能直接把仓库源码目录作为静态站点，否则浏览器无法解析 npm 模块。GitHub Pages 工作流会在 `main` 更新后执行测试、构建并发布产物，`vercel.json` 也已声明构建目录和基础安全响应头。
 
+仓库仍启用 GitHub Pages 的旧分支发布器，因此工作流会先等待旧发布完成，再发布并校验 Vite 产物，避免源码覆盖生产构建。若以后在仓库设置中将 Pages Source 切换为 GitHub Actions，工作流会自动跳过不存在的旧发布。
+
 当前预览域名仍为 `pdf.zsphere.top`。在内容与验收全部完成前不会修改 DNS 或切换域名；届时再将正式域名调整为 `pdf.orbitvo.com`，并补齐 canonical、OG URL 和 sitemap 的正式地址。
