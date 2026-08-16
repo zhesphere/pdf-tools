@@ -92,16 +92,12 @@
           <a href="https://orbitvo.com" rel="home">Orbitvo Tools</a>
           <span aria-hidden="true">/</span>
           <span>PDF</span>
+          <button class="privacy-chip" id="privacy-open" type="button" title="查看隐私说明">
+            <span aria-hidden="true"></span>
+            本地处理
+          </button>
           <button class="icon-button" id="theme-toggle" type="button" aria-label="切换深浅色" title="切换深浅色">◐</button>
         </header>
-
-        <section class="trust-banner" aria-label="文件处理说明">
-          <div>
-            <strong>原文件默认不离开你的设备</strong>
-            <span>页面整理在浏览器本地完成；只有你主动启用翻译时，待翻译文字才会发送给第三方服务。</span>
-          </div>
-          <button class="btn-link" id="privacy-open" type="button">查看隐私边界</button>
-        </section>
       <!-- Merge PDF Tool -->
       <section id="tool-merge" class="tool-panel active">
         <div class="tool-header">
@@ -412,11 +408,10 @@
 
         <div class="upload-area single" id="translate-upload">
           <div class="network-notice" role="note">
-            <strong>可选联网能力</strong>
-            <p>PDF 文件仍在本地解析，但你选择或要求全文翻译的文字会发送至 MyMemory。扫描件不会自动 OCR。</p>
+            <p><strong>联网翻译</strong> · 仅将待翻译文字发送至 MyMemory，PDF 文件不上传；扫描件不支持 OCR。</p>
             <label class="consent-row">
               <input type="checkbox" id="translate-consent">
-              <span>我了解并同意发送待翻译文字</span>
+              <span>同意后启用</span>
             </label>
           </div>
           <div class="upload-zone" id="translate-dropzone">
@@ -502,7 +497,7 @@
             <span>Orbitvo Tools 家族 · 页面整理默认本地处理</span>
           </div>
           <nav aria-label="页脚导航">
-            <button class="btn-link" id="privacy-footer-open" type="button">隐私与限制</button>
+            <button class="btn-link" id="privacy-footer-open" type="button">隐私说明</button>
             <a href="https://orbitvo.com">返回 Orbitvo</a>
           </nav>
         </footer>
