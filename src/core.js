@@ -65,3 +65,38 @@ export function parsePageRange(rangeStr, totalPages) {
 export function createFileFingerprint(file) {
   return [file.name, file.size, file.lastModified || 0].join(':');
 }
+
+export function createExportFilename(originalName, suffix, extension = 'pdf') {
+  const cleanExtension = String(extension).replace(/[^a-z0-9]/gi, '').toLowerCase() || 'pdf';
+  const cleanSuffix = String(suffix || 'output')
+    .replace(/[^\p{L}\p{N}-]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32) || 'output';
+  const base = String(originalName || 'document.pdf')
+    .replace(/\.pdf$/i, '')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^\.+|[. ]+$/g, '')
+    .slice(0, 80) || 'document';
+  return `${base}-${cleanSuffix}.${cleanExtension}`;
+}
+
+export function classifyPdfError(error) {
+  const name = String(error?.name || 'Error');
+  const detail = String(error?.message || error || '未知错误');
+  const normalized = `${name} ${detail}`.toLowerCase();
+
+  if (name === 'TaskCancelledError' || normalized.includes('任务已取消')) {
+    return { code: 'cancelled', message: '任务已取消，原文件没有变化', recoverable: true };
+  }
+  if (/password|encrypted|encryption/.test(normalized)) {
+    return { code: 'password', message: '此 PDF 受密码保护，暂时无法在本地处理', recoverable: false };
+  }
+  if (/invalid pdf|no pdf header|parse|corrupt|unexpected object/.test(normalized)) {
+    return { code: 'invalid', message: 'PDF 已损坏或格式不受支持，请尝试用阅读器重新导出', recoverable: false };
+  }
+  if (/out of memory|allocation|array buffer|memory limit/.test(normalized)) {
+    return { code: 'memory', message: '设备内存不足，请关闭其他页面、减少文件或改用电脑处理', recoverable: true };
+  }
+  return { code: 'unknown', message: `处理失败：${detail}`, recoverable: true };
+}

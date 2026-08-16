@@ -4,11 +4,13 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import JSZip from 'jszip';
 import {
   assessDocumentRisk,
+  classifyPdfError,
+  createExportFilename,
   createFileFingerprint,
   formatFileSize,
-  parsePageRange,
   validatePdfFile,
 } from './src/core.js';
+import { createTaskRun } from './src/task-controller.js';
 import {
   clearLocalSession,
   loadRecipe,
@@ -114,6 +116,68 @@ function showToast(message, type = 'info', duration = 3000) {
   }, duration);
 }
 
+function createTaskUi(progressEl, statusEl) {
+  const fill = progressEl.querySelector('.progress-fill');
+  const cancelButton = document.createElement('button');
+  cancelButton.type = 'button';
+  cancelButton.className = 'btn-secondary task-cancel';
+  cancelButton.textContent = '取消任务';
+  cancelButton.hidden = true;
+  progressEl.insertAdjacentElement('afterend', cancelButton);
+  progressEl.setAttribute('role', 'progressbar');
+  progressEl.setAttribute('aria-valuemin', '0');
+  progressEl.setAttribute('aria-valuemax', '100');
+
+  let activeRun = null;
+  cancelButton.addEventListener('click', () => {
+    if (!activeRun) return;
+    activeRun.cancel();
+    cancelButton.disabled = true;
+    statusEl.textContent = '正在取消…';
+  });
+
+  return {
+    start(message) {
+      activeRun?.cancel();
+      progressEl.style.display = 'block';
+      progressEl.classList.add('determinate');
+      fill.style.width = '0%';
+      progressEl.setAttribute('aria-valuenow', '0');
+      cancelButton.hidden = false;
+      cancelButton.disabled = false;
+      statusEl.textContent = message;
+      statusEl.className = 'status-text';
+      activeRun = createTaskRun({
+        onProgress: progress => {
+          const percent = Math.round(progress.ratio * 100);
+          fill.style.width = `${percent}%`;
+          progressEl.setAttribute('aria-valuenow', String(percent));
+          if (progress.message) statusEl.textContent = progress.message;
+        },
+      });
+      return activeRun;
+    },
+    fail(error, run) {
+      if (run && activeRun !== run) return classifyPdfError(error);
+      const result = classifyPdfError(error);
+      statusEl.textContent = result.code === 'cancelled' ? `ℹ️ ${result.message}` : `❌ ${result.message}`;
+      statusEl.className = result.code === 'cancelled' ? 'status-text' : 'status-text error';
+      showToast(result.message, result.code === 'cancelled' ? 'info' : 'error', 5000);
+      return result;
+    },
+    finish(run) {
+      if (run && activeRun !== run) return;
+      progressEl.style.display = 'none';
+      progressEl.classList.remove('determinate');
+      cancelButton.hidden = true;
+      activeRun = null;
+    },
+    get activeRun() {
+      return activeRun;
+    },
+  };
+}
+
 // ==================== Drag & Drop Helpers ====================
 function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const dropzone = document.getElementById(dropzoneId);
@@ -178,6 +242,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const mergeBtn = document.getElementById('merge-btn');
   const statusEl = document.getElementById('merge-status');
   const progressEl = document.getElementById('merge-progress');
+  const taskUi = createTaskUi(progressEl, statusEl);
 
   function renderFileList() {
     fileList.innerHTML = '';
@@ -262,24 +327,30 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   }, true);
 
   mergeBtn.addEventListener('click', async () => {
-    progressEl.style.display = 'block';
-    statusEl.textContent = '处理中...';
-    statusEl.className = 'status-text';
+    const task = taskUi.start('准备合并文件…');
     mergeBtn.disabled = true;
 
     try {
-      const pdfBytes = await mergePdfs(await Promise.all(mergeFiles.map(file => file.arrayBuffer())));
-      downloadPdf(pdfBytes, 'merged.pdf');
+      const inputs = [];
+      for (let index = 0; index < mergeFiles.length; index += 1) {
+        task.throwIfCancelled();
+        inputs.push(await mergeFiles[index].arrayBuffer());
+        task.report(index + 1, mergeFiles.length * 5, `正在读取第 ${index + 1}/${mergeFiles.length} 个文件`);
+      }
+      const pdfBytes = await mergePdfs(inputs, {
+        signal: task.signal,
+        checkpoint: (completed, total, message) => task.checkpoint(completed + total / 4, total * 1.25, message),
+      });
+      const filename = createExportFilename(mergeFiles[0].name, `merged-${mergeFiles.length}`);
+      downloadPdf(pdfBytes, filename);
 
-      statusEl.textContent = '✅ 下载已开始';
+      statusEl.textContent = `✅ ${filename} 下载已开始`;
       statusEl.className = 'status-text success';
       showToast('合并完成! 下载已开始', 'success');
     } catch (error) {
-      statusEl.textContent = '❌ 合并PDF失败: ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast('合并失败: ' + error.message, 'error');
+      taskUi.fail(error, task);
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
       mergeBtn.disabled = mergeFiles.length < 2;
     }
   });
@@ -294,6 +365,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const pagesInput = document.getElementById('split-pages');
   const statusEl = document.getElementById('split-status');
   const progressEl = document.getElementById('split-progress');
+  const taskUi = createTaskUi(progressEl, statusEl);
 
   function setFile(file) {
     splitFile = file;
@@ -319,62 +391,62 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   setupDragDrop('split-dropzone', 'split-input', setFile);
 
   extractBtn.addEventListener('click', async () => {
-    progressEl.style.display = 'block';
-    statusEl.textContent = '处理中...';
-    statusEl.className = 'status-text';
+    const task = taskUi.start('准备提取页面…');
     extractBtn.disabled = true;
     splitAllBtn.disabled = true;
 
     try {
       const arrayBuffer = await splitFile.arrayBuffer();
-      const sourcePdf = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-      const totalPages = sourcePdf.getPageCount();
-      const pageNumbers = parsePageRange(pagesInput.value.trim(), totalPages);
-      const pdfBytes = await extractPdfPages(arrayBuffer, pageNumbers);
-      downloadPdf(pdfBytes, 'extracted.pdf');
+      const pdfBytes = await extractPdfPages(arrayBuffer, pagesInput.value.trim(), {
+        signal: task.signal,
+        checkpoint: task.checkpoint.bind(task),
+      });
+      const filename = createExportFilename(splitFile.name, 'extracted-pages');
+      downloadPdf(pdfBytes, filename);
 
-      statusEl.textContent = '✅ 下载已开始';
+      statusEl.textContent = `✅ ${filename} 下载已开始`;
       statusEl.className = 'status-text success';
       showToast('提取完成! 下载已开始', 'success');
     } catch (error) {
-      statusEl.textContent = '❌ ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast(error.message, 'error');
+      taskUi.fail(error, task);
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
       extractBtn.disabled = !splitFile;
       splitAllBtn.disabled = !splitFile;
     }
   });
 
   splitAllBtn.addEventListener('click', async () => {
-    progressEl.style.display = 'block';
-    statusEl.textContent = '处理中（大文件可能较慢）...';
-    statusEl.className = 'status-text';
+    const task = taskUi.start('准备拆分页面…');
     extractBtn.disabled = true;
     splitAllBtn.disabled = true;
 
     try {
       const arrayBuffer = await splitFile.arrayBuffer();
-      const pages = await splitPdfPages(arrayBuffer);
+      const pages = await splitPdfPages(arrayBuffer, {
+        signal: task.signal,
+        checkpoint: (completed, total, message) => task.checkpoint(completed, total * 1.25, message),
+      });
       const zip = new JSZip();
 
       pages.forEach((pageBytes, index) => {
         zip.file(`page_${String(index + 1).padStart(3, '0')}.pdf`, pageBytes);
       });
 
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      downloadBlob(zipBlob, 'split_pages.zip');
+      const zipBlob = await zip.generateAsync({ type: 'blob' }, metadata => {
+        task.throwIfCancelled();
+        task.report(80 + metadata.percent * 0.2, 100, `正在打包 ${Math.round(metadata.percent)}%`);
+      });
+      const filename = createExportFilename(splitFile.name, 'split-pages', 'zip');
+      downloadBlob(zipBlob, filename);
 
-      statusEl.textContent = '✅ 下载已开始（共 ' + pages.length + ' 页）';
+      statusEl.textContent = `✅ ${filename} 下载已开始（共 ${pages.length} 页）`;
       statusEl.className = 'status-text success';
       showToast(`拆分完成! ${pages.length} 个页面已打包下载`, 'success');
     } catch (error) {
-      statusEl.textContent = '❌ 拆分PDF失败: ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast('拆分失败: ' + error.message, 'error');
+      taskUi.fail(error, task);
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
       extractBtn.disabled = !splitFile;
       splitAllBtn.disabled = !splitFile;
     }
@@ -389,6 +461,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const pagesInput = document.getElementById('remove-pages');
   const statusEl = document.getElementById('remove-status');
   const progressEl = document.getElementById('remove-progress');
+  const taskUi = createTaskUi(progressEl, statusEl);
 
   function setFile(file) {
     removeFile = file;
@@ -412,28 +485,25 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   setupDragDrop('remove-dropzone', 'remove-input', setFile);
 
   removeBtn.addEventListener('click', async () => {
-    progressEl.style.display = 'block';
-    statusEl.textContent = '处理中...';
-    statusEl.className = 'status-text';
+    const task = taskUi.start('准备删除页面…');
     removeBtn.disabled = true;
 
     try {
       const arrayBuffer = await removeFile.arrayBuffer();
-      const sourcePdf = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-      const totalPages = sourcePdf.getPageCount();
-      const pagesToRemove = parsePageRange(pagesInput.value.trim(), totalPages);
-      const pdfBytes = await removePdfPages(arrayBuffer, pagesToRemove);
-      downloadPdf(pdfBytes, 'pages_removed.pdf');
+      const pdfBytes = await removePdfPages(arrayBuffer, pagesInput.value.trim(), {
+        signal: task.signal,
+        checkpoint: task.checkpoint.bind(task),
+      });
+      const filename = createExportFilename(removeFile.name, 'pages-removed');
+      downloadPdf(pdfBytes, filename);
 
-      statusEl.textContent = '✅ 下载已开始';
+      statusEl.textContent = `✅ ${filename} 下载已开始`;
       statusEl.className = 'status-text success';
       showToast('页面删除完成! 下载已开始', 'success');
     } catch (error) {
-      statusEl.textContent = '❌ ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast(error.message, 'error');
+      taskUi.fail(error, task);
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
       removeBtn.disabled = !removeFile;
     }
   });
@@ -448,6 +518,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const pagesInput = document.getElementById('rotate-pages');
   const statusEl = document.getElementById('rotate-status');
   const progressEl = document.getElementById('rotate-progress');
+  const taskUi = createTaskUi(progressEl, statusEl);
 
   document.querySelectorAll('.rotate-option').forEach(opt => {
     opt.addEventListener('click', () => {
@@ -481,31 +552,25 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   setupDragDrop('rotate-dropzone', 'rotate-input', setFile);
 
   rotateBtn.addEventListener('click', async () => {
-    progressEl.style.display = 'block';
-    statusEl.textContent = '处理中...';
-    statusEl.className = 'status-text';
+    const task = taskUi.start('准备旋转页面…');
     rotateBtn.disabled = true;
 
     try {
       const arrayBuffer = await rotateFile.arrayBuffer();
-      const sourcePdf = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-      const totalPages = sourcePdf.getPageCount();
+      const pdfBytes = await rotatePdfPages(arrayBuffer, selectedAngle, pagesInput.value.trim(), {
+        signal: task.signal,
+        checkpoint: task.checkpoint.bind(task),
+      });
+      const filename = createExportFilename(rotateFile.name, 'rotated');
+      downloadPdf(pdfBytes, filename);
 
-      const pagesToRotate = pagesInput.value.trim()
-        ? parsePageRange(pagesInput.value.trim(), totalPages)
-        : [];
-      const pdfBytes = await rotatePdfPages(arrayBuffer, selectedAngle, pagesToRotate);
-      downloadPdf(pdfBytes, 'rotated.pdf');
-
-      statusEl.textContent = '✅ 下载已开始';
+      statusEl.textContent = `✅ ${filename} 下载已开始`;
       statusEl.className = 'status-text success';
       showToast('旋转完成! 下载已开始', 'success');
     } catch (error) {
-      statusEl.textContent = '❌ 旋转PDF失败: ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast('旋转失败: ' + error.message, 'error');
+      taskUi.fail(error, task);
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
       rotateBtn.disabled = !rotateFile;
     }
   });
@@ -523,6 +588,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const exportBtn = document.getElementById('reorder-export-btn');
   const statusEl = document.getElementById('reorder-status');
   const progressEl = document.getElementById('reorder-progress');
+  const taskUi = createTaskUi(progressEl, statusEl);
 
   const state = {
     pdfBytes: null,
@@ -554,6 +620,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   }
 
   function resetAll() {
+    taskUi.activeRun?.cancel();
     state.reorderFile = null;
     state.pdfBytes = null;
     state.totalPages = 0;
@@ -570,22 +637,17 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   setupDragDrop('reorder-dropzone', 'reorder-input', setFile);
 
   async function loadAndRender(file) {
-    progressEl.style.display = 'block';
-    statusEl.textContent = '加载PDF中...';
-    statusEl.className = 'status-text';
+    const task = taskUi.start('正在读取 PDF…');
 
     try {
       const arrayBuffer = await file.arrayBuffer();
       state.pdfBytes = arrayBuffer;
       state.fingerprint = createFileFingerprint(file);
 
-      // Load with pdf-lib to get page count & dimensions
-      const pdfLibDoc = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-      state.totalPages = pdfLibDoc.getPageCount();
-
       // Load with pdf.js for rendering
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
       const pdfDoc = await loadingTask.promise;
+      state.totalPages = pdfDoc.numPages;
 
       // Default order: 0, 1, 2, ...
       state.pageOrder = Array.from({ length: state.totalPages }, (_, i) => i);
@@ -611,19 +673,17 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       workspace.style.display = 'block';
       pageCountEl.textContent = `共 ${state.totalPages} 页 — 拖拽缩略图调整顺序`;
 
-      await renderThumbnails(pdfDoc);
+      await renderThumbnails(pdfDoc, task);
       statusEl.textContent = '';
       showToast(`已加载 ${state.totalPages} 页，可拖拽重排`, 'success');
     } catch (error) {
-      statusEl.textContent = '❌ 加载PDF失败: ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast('加载失败: ' + error.message, 'error');
+      taskUi.fail(error, task);
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
     }
   }
 
-  async function renderThumbnails(pdfDoc) {
+  async function renderThumbnails(pdfDoc, task) {
     thumbnailGrid.innerHTML = '';
 
     // Calculate a reasonable thumb scale
@@ -633,6 +693,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     const thumbScale = cardWidth / 595; // A4 width ≈ 595pt
 
     for (let i = 0; i < state.totalPages; i++) {
+      task.throwIfCancelled();
       const origIdx = state.pageOrder[i];
       const pageNum = origIdx + 1;
 
@@ -651,6 +712,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       card.className = 'reorder-thumb-card';
       card.draggable = true;
       card.dataset.orderIndex = i; // position in current order
+      card.dataset.pageIndex = origIdx;
 
       // Order badge (top-left circle)
       const badge = document.createElement('div');
@@ -681,26 +743,27 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       actions.append(previousButton, nextButton);
       card.appendChild(actions);
 
-      const movePage = async targetIndex => {
-        const [moved] = state.pageOrder.splice(i, 1);
+      const movePage = targetIndex => {
+        const currentIndex = Number.parseInt(card.dataset.orderIndex, 10);
+        const [moved] = state.pageOrder.splice(currentIndex, 1);
         state.pageOrder.splice(targetIndex, 0, moved);
         persistPageOrder();
-        await renderThumbnails(pdfDoc);
+        syncThumbnailCards();
       };
       previousButton.addEventListener('click', event => {
         event.stopPropagation();
-        movePage(i - 1);
+        movePage(Number.parseInt(card.dataset.orderIndex, 10) - 1);
       });
       nextButton.addEventListener('click', event => {
         event.stopPropagation();
-        movePage(i + 1);
+        movePage(Number.parseInt(card.dataset.orderIndex, 10) + 1);
       });
 
       // ===== Drag events =====
       card.addEventListener('dragstart', (e) => {
         e.dataTransfer.effectAllowed = 'move';
         card.classList.add('dragging');
-        e.dataTransfer.setData('text/plain', String(i));
+        e.dataTransfer.setData('text/plain', card.dataset.orderIndex);
       });
 
       card.addEventListener('dragend', () => {
@@ -729,21 +792,33 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
           const [moved] = state.pageOrder.splice(fromIdx, 1);
           state.pageOrder.splice(toIdx, 0, moved);
           persistPageOrder();
-          renderThumbnails(pdfDoc);
+          syncThumbnailCards();
         }
       });
 
       thumbnailGrid.appendChild(card);
+      await task.checkpoint(i + 1, state.totalPages, `正在生成缩略图 ${i + 1}/${state.totalPages}`);
     }
   }
 
+  function syncThumbnailCards() {
+    state.pageOrder.forEach((pageIndex, orderIndex) => {
+      const card = thumbnailGrid.querySelector(`[data-page-index="${pageIndex}"]`);
+      if (!card) return;
+      card.dataset.orderIndex = orderIndex;
+      card.querySelector('.thumb-badge').textContent = orderIndex + 1;
+      const [previousButton, nextButton] = card.querySelectorAll('.thumb-actions button');
+      previousButton.disabled = orderIndex === 0;
+      nextButton.disabled = orderIndex === state.totalPages - 1;
+      thumbnailGrid.appendChild(card);
+    });
+  }
+
   // ============ Reverse ============
-  reverseBtn.addEventListener('click', async () => {
+  reverseBtn.addEventListener('click', () => {
     state.pageOrder.reverse();
     persistPageOrder();
-    const loadingTask = pdfjsLib.getDocument({ data: state.pdfBytes.slice(0) });
-    const pdfDoc = await loadingTask.promise;
-    await renderThumbnails(pdfDoc);
+    syncThumbnailCards();
     showToast('页面顺序已反转', 'info');
   });
 
@@ -765,9 +840,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       }
       state.pageOrder = parts.map(n => n - 1); // convert to 0-based
       persistPageOrder();
-      const loadingTask = pdfjsLib.getDocument({ data: state.pdfBytes.slice(0) });
-      const pdfDoc = await loadingTask.promise;
-      await renderThumbnails(pdfDoc);
+      syncThumbnailCards();
       showToast('自定义顺序已应用', 'success');
     } catch (err) {
       showToast('格式错误: ' + err.message, 'error');
@@ -781,24 +854,24 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
   // ============ Export ============
   exportBtn.addEventListener('click', async () => {
-    progressEl.style.display = 'block';
-    statusEl.textContent = '生成PDF中...';
-    statusEl.className = 'status-text';
+    const task = taskUi.start('准备生成 PDF…');
     exportBtn.disabled = true;
 
     try {
-      const pdfBytes = await reorderPdfPages(state.pdfBytes.slice(0), state.pageOrder);
-      downloadPdf(pdfBytes, 'reordered.pdf');
+      const pdfBytes = await reorderPdfPages(state.pdfBytes.slice(0), state.pageOrder, {
+        signal: task.signal,
+        checkpoint: task.checkpoint.bind(task),
+      });
+      const filename = createExportFilename(state.reorderFile.name, 'reordered');
+      downloadPdf(pdfBytes, filename);
 
-      statusEl.textContent = '✅ 下载已开始';
+      statusEl.textContent = `✅ ${filename} 下载已开始`;
       statusEl.className = 'status-text success';
       showToast('重排完成! 下载已开始', 'success');
     } catch (error) {
-      statusEl.textContent = '❌ 导出失败: ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast('导出失败: ' + error.message, 'error');
+      taskUi.fail(error, task);
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
       exportBtn.disabled = false;
     }
   });

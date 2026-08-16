@@ -693,6 +693,21 @@ select:focus-visible {
   animation: indeterminate 1.5s ease-in-out infinite;
 }
 
+.progress-bar.determinate .progress-fill {
+  animation: none;
+  margin-left: 0;
+  transition: width 0.16s ease;
+}
+
+.task-cancel {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 220;
+  margin-top: 10px;
+  box-shadow: var(--shadow-md);
+}
+
 @keyframes indeterminate {
   0% { width: 0%; margin-left: 0; }
   50% { width: 60%; margin-left: 20%; }

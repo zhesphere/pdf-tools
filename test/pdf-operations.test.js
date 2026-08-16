@@ -10,6 +10,7 @@ import {
   rotatePdfPages,
   splitPdfPages,
 } from '../src/pdf-operations.js';
+import { createTaskRun, TaskCancelledError } from '../src/task-controller.js';
 
 async function createPdf(widths) {
   const document = await PDFDocument.create();
@@ -56,4 +57,20 @@ test('destructive and ambiguous page operations fail safely', async () => {
   await assert.rejects(() => removePdfPages(source, [1, 2]), /不能删除全部页面/);
   await assert.rejects(() => reorderPdfPages(source, [0, 0]), /不能重复/);
   await assert.rejects(() => rotatePdfPages(source, 45), /旋转角度/);
+});
+
+test('page ranges are parsed inside the engine and long tasks can be cancelled', async () => {
+  const source = await createPdf([200, 300, 400, 500]);
+  assert.deepEqual((await inspectPdf(await extractPdfPages(source, '2-3'))).widths, [300, 400]);
+
+  let task;
+  task = createTaskRun({
+    onProgress({ completed }) {
+      if (completed === 1) task.cancel();
+    },
+  });
+  await assert.rejects(
+    () => splitPdfPages(source, { signal: task.signal, checkpoint: task.checkpoint.bind(task) }),
+    TaskCancelledError,
+  );
 });
