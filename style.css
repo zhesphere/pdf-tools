@@ -1351,6 +1351,35 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.preview-canvas-slot {
+  width: 100%;
+  min-height: 168px;
+  aspect-ratio: 0.707;
+  display: grid;
+  place-items: center;
+  background:
+    linear-gradient(110deg, transparent 35%, color-mix(in srgb, var(--border) 55%, transparent) 50%, transparent 65%) 0 0 / 220% 100%,
+    var(--surface);
+  animation: preview-placeholder 1.4s ease-in-out infinite;
+}
+
+.preview-loaded .preview-canvas-slot {
+  min-height: 0;
+  aspect-ratio: auto;
+  background: white;
+  animation: none;
+}
+
+.preview-canvas-slot canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+@keyframes preview-placeholder {
+  0%, 100% { background-position: 100% 0; }
+  50% { background-position: 0 0; }
+}
+
 .thumb-actions {
   position: absolute;
   right: 8px;

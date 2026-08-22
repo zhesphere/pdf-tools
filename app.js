@@ -26,6 +26,7 @@ import {
   rotatePdfPages,
   splitPdfPages,
 } from './src/pdf-operations.js';
+import { createPdfPreviewController } from './src/pdf-preview-controller.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -52,6 +53,10 @@ function warnAboutFileRisk(files) {
     mobile: window.matchMedia('(max-width: 768px)').matches,
   });
   if (risk.level === 'warning') showToast(risk.message, 'info', 6000);
+}
+
+function getPreviewConcurrency() {
+  return window.matchMedia('(max-width: 768px)').matches ? 1 : 2;
 }
 
 // ==================== Navigation ====================
@@ -592,6 +597,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
   const state = {
     pdfBytes: null,
+    pdfDoc: null,
+    previewController: null,
     totalPages: 0,
     pageOrder: [],    // current order: [0, 1, 2, ...]  (zero-based indices)
     thumbScale: 0.3,
@@ -621,6 +628,10 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
   function resetAll() {
     taskUi.activeRun?.cancel();
+    state.previewController?.clear();
+    state.previewController = null;
+    void state.pdfDoc?.destroy();
+    state.pdfDoc = null;
     state.reorderFile = null;
     state.pdfBytes = null;
     state.totalPages = 0;
@@ -640,13 +651,20 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     const task = taskUi.start('正在读取 PDF…');
 
     try {
+      state.previewController?.clear();
+      state.previewController = null;
+      await state.pdfDoc?.destroy();
+      state.pdfDoc = null;
       const arrayBuffer = await file.arrayBuffer();
+      task.throwIfCancelled();
       state.pdfBytes = arrayBuffer;
       state.fingerprint = createFileFingerprint(file);
 
       // Load with pdf.js for rendering
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
       const pdfDoc = await loadingTask.promise;
+      task.throwIfCancelled();
+      state.pdfDoc = pdfDoc;
       state.totalPages = pdfDoc.numPages;
 
       // Default order: 0, 1, 2, ...
@@ -673,7 +691,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       workspace.style.display = 'block';
       pageCountEl.textContent = `共 ${state.totalPages} 页 — 拖拽缩略图调整顺序`;
 
-      await renderThumbnails(pdfDoc, task);
+      renderThumbnails(pdfDoc);
+      task.report(1, 1, '缩略图会在进入可见区域时加载');
       statusEl.textContent = '';
       showToast(`已加载 ${state.totalPages} 页，可拖拽重排`, 'success');
     } catch (error) {
@@ -683,7 +702,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     }
   }
 
-  async function renderThumbnails(pdfDoc, task) {
+  function renderThumbnails(pdfDoc) {
+    state.previewController?.clear();
     thumbnailGrid.innerHTML = '';
 
     // Calculate a reasonable thumb scale
@@ -692,20 +712,45 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     const cardWidth = Math.max(120, (gridWidth - (cols - 1) * 16) / cols);
     const thumbScale = cardWidth / 595; // A4 width ≈ 595pt
 
+    const previewController = createPdfPreviewController({
+      concurrency: getPreviewConcurrency(),
+      renderPage: async ({ element, pageIndex, signal, registerCancel }) => {
+        const pdfPage = await pdfDoc.getPage(pageIndex + 1);
+        if (signal.aborted) return null;
+        const viewport = pdfPage.getViewport({ scale: thumbScale });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        canvas.className = 'thumb-canvas';
+        const renderTask = pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport });
+        registerCancel(() => renderTask.cancel());
+        await renderTask.promise;
+        if (signal.aborted) return null;
+        element.querySelector('.preview-canvas-slot').replaceChildren(canvas);
+        element.classList.add('preview-loaded');
+        return {
+          cleanup() {
+            canvas.width = 0;
+            canvas.height = 0;
+            canvas.remove();
+            element.classList.remove('preview-loaded');
+          },
+        };
+      },
+      unloadPage(element) {
+        element.querySelector('.preview-canvas-slot')?.replaceChildren();
+        element.classList.remove('preview-loaded');
+      },
+      onError(error, pageIndex) {
+        statusEl.textContent = `第 ${pageIndex + 1} 页缩略图加载失败：${error.message}`;
+        statusEl.className = 'status-text error';
+      },
+    });
+    state.previewController = previewController;
+
     for (let i = 0; i < state.totalPages; i++) {
-      task.throwIfCancelled();
       const origIdx = state.pageOrder[i];
       const pageNum = origIdx + 1;
-
-      const pdfPage = await pdfDoc.getPage(pageNum);
-      const viewport = pdfPage.getViewport({ scale: thumbScale });
-
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      canvas.className = 'thumb-canvas';
-      const ctx = canvas.getContext('2d');
-      await pdfPage.render({ canvasContext: ctx, viewport: viewport }).promise;
 
       // Card wrapper
       const card = document.createElement('div');
@@ -720,7 +765,11 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       badge.textContent = i + 1;
       card.appendChild(badge);
 
-      card.appendChild(canvas);
+      const canvasSlot = document.createElement('div');
+      canvasSlot.className = 'preview-canvas-slot';
+      canvasSlot.style.width = '100%';
+      canvasSlot.style.height = '100%';
+      card.appendChild(canvasSlot);
 
       // Page number label
       const label = document.createElement('div');
@@ -797,7 +846,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       });
 
       thumbnailGrid.appendChild(card);
-      await task.checkpoint(i + 1, state.totalPages, `正在生成缩略图 ${i + 1}/${state.totalPages}`);
+      previewController.observe(card, origIdx);
     }
   }
 
@@ -891,6 +940,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const state = {
     pdfBytes: null,
     pdfDoc: null,
+    previewController: null,
     totalPages: 0,
     scale: 1.5,
     pageDims: [],       // [{ width, height }] in PDF points
@@ -904,6 +954,10 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   uploadArea.style.display = 'block';
 
   function resetEditor() {
+    taskUi.activeRun?.cancel();
+    state.previewController?.clear();
+    state.previewController = null;
+    void state.pdfDoc?.destroy();
     state.pdfBytes = null;
     state.pdfDoc = null;
     state.totalPages = 0;
@@ -943,6 +997,10 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     const task = taskUi.start('正在读取 PDF…');
 
     try {
+      state.previewController?.clear();
+      state.previewController = null;
+      await state.pdfDoc?.destroy();
+      state.pdfDoc = null;
       const arrayBuffer = await file.arrayBuffer();
       task.throwIfCancelled();
       state.pdfBytes = arrayBuffer;
@@ -967,10 +1025,17 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
         await task.checkpoint(i + 1, state.totalPages * 2, `正在分析第 ${i + 1}/${state.totalPages} 页`);
       }
 
-      await renderAllPages(task, state.totalPages);
-
       uploadArea.style.display = 'none';
       editorDiv.style.display = 'block';
+      renderAllPages();
+      task.report(1, 1, '页面会在进入可见区域时加载');
+
+      const risk = assessDocumentRisk({
+        fileSize: file.size,
+        pageCount: state.totalPages,
+        mobile: window.matchMedia('(max-width: 768px)').matches,
+      });
+      if (risk.level === 'warning') showToast(risk.message, 'info', 6000);
       statusEl.textContent = '';
       showToast(`已加载 ${state.totalPages} 页`, 'success');
     } catch (error) {
@@ -980,11 +1045,47 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     }
   }
 
-  async function renderAllPages(task = null, progressOffset = 0) {
+  function renderAllPages() {
+    state.previewController?.clear();
     pagesContainer.innerHTML = '';
 
+    const previewController = createPdfPreviewController({
+      concurrency: getPreviewConcurrency(),
+      renderPage: async ({ element, pageIndex, signal, registerCancel }) => {
+        const pdfPage = await state.pdfDoc.getPage(pageIndex + 1);
+        if (signal.aborted) return null;
+        const viewport = pdfPage.getViewport({ scale: state.scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        canvas.style.display = 'block';
+        const renderTask = pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport });
+        registerCancel(() => renderTask.cancel());
+        await renderTask.promise;
+        if (signal.aborted) return null;
+        element.querySelector('.preview-canvas-slot').replaceChildren(canvas);
+        element.classList.add('preview-loaded');
+        return {
+          cleanup() {
+            canvas.width = 0;
+            canvas.height = 0;
+            canvas.remove();
+            element.classList.remove('preview-loaded');
+          },
+        };
+      },
+      unloadPage(element) {
+        element.querySelector('.preview-canvas-slot')?.replaceChildren();
+        element.classList.remove('preview-loaded');
+      },
+      onError(error, pageIndex) {
+        statusEl.textContent = `第 ${pageIndex + 1} 页预览失败：${error.message}`;
+        statusEl.className = 'status-text error';
+      },
+    });
+    state.previewController = previewController;
+
     for (let i = 0; i < state.totalPages; i++) {
-      task?.throwIfCancelled();
       const pageNum = i + 1;
       const dim = state.pageDims[i];
 
@@ -1000,18 +1101,11 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       badge.textContent = `第 ${pageNum} 页`;
       card.appendChild(badge);
 
-      // Canvas
-      const pdfPage = await state.pdfDoc.getPage(pageNum);
-      const viewport = pdfPage.getViewport({ scale: state.scale });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      canvas.style.display = 'block';
-      const ctx = canvas.getContext('2d');
-      const renderTask = pdfPage.render({ canvasContext: ctx, viewport: viewport });
-      await renderTask.promise;
-      task?.throwIfCancelled();
-      card.appendChild(canvas);
+      const canvasSlot = document.createElement('div');
+      canvasSlot.className = 'preview-canvas-slot';
+      canvasSlot.style.width = '100%';
+      canvasSlot.style.height = '100%';
+      card.appendChild(canvasSlot);
 
       // Annotations layer
       const annLayer = document.createElement('div');
@@ -1020,13 +1114,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       card.appendChild(annLayer);
 
       pagesContainer.appendChild(card);
-      if (task) {
-        await task.checkpoint(
-          progressOffset + pageNum,
-          progressOffset + state.totalPages,
-          `正在渲染第 ${pageNum}/${state.totalPages} 页`,
-        );
-      }
+      previewController.observe(card, i);
     }
 
     // Re-render all existing annotations
@@ -1230,7 +1318,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     state.scale = Math.round((state.scale + 0.25) * 100) / 100;
     const task = taskUi.start('正在更新预览…');
     try {
-      await renderAllPages(task);
+      renderAllPages();
+      task.report(1, 1, '预览已更新');
     } catch (error) {
       taskUi.fail(error, task);
     } finally {
@@ -1243,7 +1332,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     state.scale = Math.round((state.scale - 0.25) * 100) / 100;
     const task = taskUi.start('正在更新预览…');
     try {
-      await renderAllPages(task);
+      renderAllPages();
+      task.report(1, 1, '预览已更新');
     } catch (error) {
       taskUi.fail(error, task);
     } finally {
@@ -1398,6 +1488,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const state = {
     pdfBytes: null,
     pdfDoc: null,
+    previewController: null,
+    translateFile: null,
     totalPages: 0,
     scale: 1.5,
     fullScale: 0.8,
@@ -1485,9 +1577,15 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     const task = taskUi.start('正在读取 PDF…');
 
     try {
+      selectionRun?.cancel();
+      state.previewController?.clear();
+      state.previewController = null;
+      await state.pdfDoc?.destroy();
+      state.pdfDoc = null;
       const arrayBuffer = await file.arrayBuffer();
       task.throwIfCancelled();
       state.pdfBytes = arrayBuffer;
+      state.translateFile = file;
 
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
       state.pdfDoc = await loadingTask.promise;
@@ -1503,13 +1601,20 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
         await task.checkpoint(i + 1, state.totalPages * 2, `正在分析第 ${i + 1}/${state.totalPages} 页`);
       }
 
-      // Render in select mode by default
-      await renderPagesTo(pagesContainer, state.scale, true, task, state.totalPages, state.totalPages * 2);
       pagesContainer.style.display = 'block';
       fullContainer.style.display = 'none';
 
       uploadArea.style.display = 'none';
       viewerDiv.style.display = 'block';
+      renderPagesTo(pagesContainer, state.scale, true);
+      task.report(1, 1, '页面会在进入可见区域时加载');
+
+      const risk = assessDocumentRisk({
+        fileSize: file.size,
+        pageCount: state.totalPages,
+        mobile: window.matchMedia('(max-width: 768px)').matches,
+      });
+      if (risk.level === 'warning') showToast(risk.message, 'info', 6000);
       fullTranslateBtn.style.display = (state.mode === 'full') ? 'inline-flex' : 'none';
       hintEl.style.display = (state.mode === 'select') ? 'inline' : 'none';
       statusEl.textContent = '';
@@ -1521,14 +1626,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     }
   }
 
-  async function renderPagesTo(
-    container,
-    scale,
-    withTextLayer,
-    task = null,
-    progressOffset = 0,
-    progressTotal = progressOffset + state.totalPages,
-  ) {
+  function renderPagesTo(container, scale, withTextLayer) {
+    state.previewController?.clear();
     container.innerHTML = '';
 
     // Calculate a good scale for the available width
@@ -1541,8 +1640,65 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       }
     }
 
+    const previewController = createPdfPreviewController({
+      concurrency: getPreviewConcurrency(),
+      renderPage: async ({ element, pageIndex, signal, registerCancel }) => {
+        const pdfPage = await state.pdfDoc.getPage(pageIndex + 1);
+        if (signal.aborted) return null;
+        const viewport = pdfPage.getViewport({ scale: useScale });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        canvas.style.display = 'block';
+        const renderTask = pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport });
+        registerCancel(() => renderTask.cancel());
+        await renderTask.promise;
+        if (signal.aborted) return null;
+
+        const slot = element.querySelector('.preview-canvas-slot');
+        slot.replaceChildren(canvas);
+        let textLayerDiv = null;
+        if (withTextLayer) {
+          const textContent = await pdfPage.getTextContent();
+          if (signal.aborted) return null;
+          textLayerDiv = document.createElement('div');
+          textLayerDiv.className = 'textLayer';
+          textLayerDiv.style.width = `${viewport.width}px`;
+          textLayerDiv.style.height = `${viewport.height}px`;
+          textLayerDiv.dataset.pageIndex = pageIndex;
+          const textLayer = new pdfjsLib.TextLayer({
+            textContentSource: textContent,
+            container: textLayerDiv,
+            viewport,
+          });
+          await textLayer.render();
+          if (signal.aborted) return null;
+          element.appendChild(textLayerDiv);
+        }
+        element.classList.add('preview-loaded');
+        return {
+          cleanup() {
+            canvas.width = 0;
+            canvas.height = 0;
+            canvas.remove();
+            textLayerDiv?.remove();
+            element.classList.remove('preview-loaded');
+          },
+        };
+      },
+      unloadPage(element) {
+        element.querySelector('.preview-canvas-slot')?.replaceChildren();
+        element.querySelector('.textLayer')?.remove();
+        element.classList.remove('preview-loaded');
+      },
+      onError(error, pageIndex) {
+        statusEl.textContent = `第 ${pageIndex + 1} 页预览失败：${error.message}`;
+        statusEl.className = 'status-text error';
+      },
+    });
+    state.previewController = previewController;
+
     for (let i = 0; i < state.totalPages; i++) {
-      task?.throwIfCancelled();
       const pageNum = i + 1;
       const dim = state.pageDims[i];
 
@@ -1556,42 +1712,14 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       badge.textContent = `第 ${pageNum} 页`;
       card.appendChild(badge);
 
-      const pdfPage = await state.pdfDoc.getPage(pageNum);
-      const viewport = pdfPage.getViewport({ scale: useScale });
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      canvas.style.display = 'block';
-      const ctx = canvas.getContext('2d');
-      await pdfPage.render({ canvasContext: ctx, viewport: viewport }).promise;
-      task?.throwIfCancelled();
-      card.appendChild(canvas);
-
-      if (withTextLayer) {
-        const textLayerDiv = document.createElement('div');
-        textLayerDiv.className = 'textLayer';
-        textLayerDiv.style.width = viewport.width + 'px';
-        textLayerDiv.style.height = viewport.height + 'px';
-        const textContent = await pdfPage.getTextContent();
-        const textLayer = new pdfjsLib.TextLayer({
-          textContentSource: textContent,
-          container: textLayerDiv,
-          viewport: viewport,
-        });
-        await textLayer.render();
-        task?.throwIfCancelled();
-        textLayerDiv.dataset.pageIndex = i;
-        card.appendChild(textLayerDiv);
-      }
+      const canvasSlot = document.createElement('div');
+      canvasSlot.className = 'preview-canvas-slot';
+      canvasSlot.style.width = '100%';
+      canvasSlot.style.height = '100%';
+      card.appendChild(canvasSlot);
 
       container.appendChild(card);
-      if (task) {
-        await task.checkpoint(
-          progressOffset + pageNum,
-          progressTotal,
-          `正在渲染第 ${pageNum}/${state.totalPages} 页`,
-        );
-      }
+      previewController.observe(card, i);
     }
   }
 
