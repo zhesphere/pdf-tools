@@ -4,7 +4,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 const outputPath = process.argv[2];
 const pageCount = Math.max(1, Number.parseInt(process.argv[3] || '6', 10));
 
-if (!outputPath) throw new Error('Usage: node test/fixtures/generate-pdf.mjs <output.pdf> [pages]');
+if (!outputPath) throw new Error('Usage: node scripts/generate-test-pdf.mjs <output.pdf> [pages]');
 
 const document = await PDFDocument.create();
 const font = await document.embedFont(StandardFonts.Helvetica);

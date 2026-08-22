@@ -27,6 +27,7 @@ import {
   splitPdfPages,
 } from './src/pdf-operations.js';
 import { createPdfPreviewController } from './src/pdf-preview-controller.js';
+import { runBatch, summarizeBatchResults } from './src/batch-runner.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -579,6 +580,245 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       rotateBtn.disabled = !rotateFile;
     }
   });
+})();
+
+// ==================== 5. Batch Processing ====================
+(function() {
+  const fileList = document.getElementById('batch-file-list');
+  const operationSelect = document.getElementById('batch-operation');
+  const angleWrap = document.getElementById('batch-angle-wrap');
+  const angleSelect = document.getElementById('batch-angle');
+  const pagesWrap = document.getElementById('batch-pages-wrap');
+  const pagesInput = document.getElementById('batch-pages');
+  const clearBtn = document.getElementById('batch-clear');
+  const runBtn = document.getElementById('batch-run');
+  const resultsEl = document.getElementById('batch-results');
+  const statusEl = document.getElementById('batch-status');
+  const progressEl = document.getElementById('batch-progress');
+  const taskUi = createTaskUi(progressEl, statusEl);
+
+  let records = [];
+  let packs = [];
+
+  function updateControls() {
+    const needsPages = operationSelect.value !== 'rotate';
+    angleWrap.hidden = needsPages;
+    pagesWrap.hidden = !needsPages;
+    clearBtn.disabled = records.length === 0;
+    runBtn.disabled = records.length === 0 || (needsPages && pagesInput.value.trim() === '');
+  }
+
+  function renderQueue() {
+    fileList.innerHTML = '';
+    records.forEach((record, index) => {
+      const row = document.createElement('div');
+      row.className = `batch-file-item status-${record.status || 'waiting'}`;
+
+      const identity = document.createElement('div');
+      identity.className = 'batch-file-identity';
+      const name = document.createElement('strong');
+      name.textContent = record.file.name;
+      const detail = document.createElement('span');
+      detail.textContent = `${formatFileSize(record.file.size)} · ${record.message || '等待处理'}`;
+      identity.append(name, detail);
+
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'icon-button';
+      removeButton.setAttribute('aria-label', `移除 ${record.file.name}`);
+      removeButton.textContent = '×';
+      removeButton.disabled = Boolean(taskUi.activeRun);
+      removeButton.addEventListener('click', () => {
+        records.splice(index, 1);
+        renderQueue();
+      });
+      row.append(identity, removeButton);
+      fileList.appendChild(row);
+    });
+    updateControls();
+  }
+
+  function addFiles(files) {
+    const fingerprints = new Set(records.map(record => createFileFingerprint(record.file)));
+    let added = 0;
+    files.forEach(file => {
+      const fingerprint = createFileFingerprint(file);
+      if (fingerprints.has(fingerprint)) return;
+      fingerprints.add(fingerprint);
+      records.push({ file, status: 'waiting', message: '等待处理' });
+      added += 1;
+    });
+    renderQueue();
+    resultsEl.innerHTML = '';
+    if (added > 0) showToast(`已加入 ${added} 个 PDF`, 'info');
+  }
+
+  setupDragDrop('batch-dropzone', 'batch-input', addFiles, true);
+
+  operationSelect.addEventListener('change', () => {
+    records.forEach(record => Object.assign(record, { status: 'waiting', message: '等待处理' }));
+    renderQueue();
+  });
+  pagesInput.addEventListener('input', updateControls);
+  clearBtn.addEventListener('click', () => {
+    taskUi.activeRun?.cancel();
+    records = [];
+    packs = [];
+    resultsEl.innerHTML = '';
+    statusEl.textContent = '';
+    renderQueue();
+  });
+
+  function createOutputFilename(file, operation) {
+    const suffixes = {
+      rotate: `rotated-${angleSelect.value}`,
+      extract: 'extracted-pages',
+      remove: 'pages-removed',
+    };
+    return createExportFilename(file.name, suffixes[operation]);
+  }
+
+  function renderResults(summary, cancelled) {
+    resultsEl.innerHTML = '';
+    if (packs.length > 0) {
+      const heading = document.createElement('h3');
+      heading.textContent = packs.length === 1 ? '结果包' : `结果包（${packs.length} 个分包）`;
+      resultsEl.appendChild(heading);
+      packs.forEach(pack => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn-secondary';
+        button.textContent = `下载 ${pack.filename} · ${pack.count} 个文件`;
+        button.addEventListener('click', () => downloadBlob(pack.blob, pack.filename));
+        resultsEl.appendChild(button);
+      });
+    }
+
+    if (summary.failed > 0) {
+      const retryButton = document.createElement('button');
+      retryButton.type = 'button';
+      retryButton.className = 'btn-secondary';
+      retryButton.textContent = `只重试失败项（${summary.failed}）`;
+      retryButton.addEventListener('click', () => {
+        records = records
+          .filter(record => record.status === 'failed')
+          .map(record => ({ ...record, status: 'waiting', message: '等待重试' }));
+        packs = [];
+        resultsEl.innerHTML = '';
+        renderQueue();
+      });
+      resultsEl.appendChild(retryButton);
+    }
+
+    const summaryText = cancelled
+      ? `已取消：${summary.success} 个成功，${summary.failed} 个失败，未开始的文件保持不变`
+      : `处理完成：${summary.success} 个成功，${summary.failed} 个失败`;
+    statusEl.textContent = `${cancelled ? 'ℹ️' : summary.failed ? '⚠️' : '✅'} ${summaryText}`;
+    statusEl.className = summary.failed ? 'status-text' : 'status-text success';
+  }
+
+  runBtn.addEventListener('click', async () => {
+    if (records.length === 0) return;
+    const operation = operationSelect.value;
+    const pageRequest = pagesInput.value.trim();
+    if (operation !== 'rotate' && !pageRequest) {
+      showToast('请输入页面范围', 'error');
+      return;
+    }
+
+    const task = taskUi.start('正在准备批处理…');
+    const packLimit = window.matchMedia('(max-width: 768px)').matches
+      ? 30 * 1024 * 1024
+      : 100 * 1024 * 1024;
+    const operationRecords = [...records];
+    packs = [];
+    resultsEl.innerHTML = '';
+    runBtn.disabled = true;
+    clearBtn.disabled = true;
+
+    let zip = new JSZip();
+    let packBytes = 0;
+    let packCount = 0;
+    let packIndex = 1;
+
+    async function flushPack(reportProgress = true) {
+      if (packCount === 0) return;
+      const blob = await zip.generateAsync({ type: 'blob', streamFiles: true }, metadata => {
+        if (reportProgress && !task.signal.aborted) {
+          task.report(metadata.percent, 100, `正在打包 ${Math.round(metadata.percent)}%`);
+        }
+      });
+      packs.push({
+        blob,
+        count: packCount,
+        filename: `pdf-tools-${operation}-batch-${String(packIndex).padStart(2, '0')}.zip`,
+      });
+      zip = new JSZip();
+      packBytes = 0;
+      packCount = 0;
+      packIndex += 1;
+    }
+
+    try {
+      records.forEach(record => Object.assign(record, { status: 'waiting', message: '等待处理' }));
+      renderQueue();
+      const outcome = await runBatch(operationRecords, async (record, index, context) => {
+        const input = await record.file.arrayBuffer();
+        if (context.signal.aborted) return null;
+        const operationOptions = {
+          signal: context.signal,
+          checkpoint: async (completed, total, message) => {
+            context.onProgress({ ratio: completed / Math.max(1, total), message });
+            await waitForTask(0, context.signal);
+          },
+        };
+        if (operation === 'rotate') {
+          return rotatePdfPages(input, Number.parseInt(angleSelect.value, 10), [], operationOptions);
+        }
+        if (operation === 'extract') {
+          return extractPdfPages(input, pageRequest, operationOptions);
+        }
+        return removePdfPages(input, pageRequest, operationOptions);
+      }, {
+        signal: task.signal,
+        onItemStart({ index }) {
+          Object.assign(records[index], { status: 'processing', message: `处理中 ${index + 1}/${records.length}` });
+          renderQueue();
+          task.report(index, records.length, `正在处理 ${records[index].file.name}`);
+        },
+        onProgress({ index, ratio, message }) {
+          task.report(index + ratio, records.length, message);
+        },
+        async onItemComplete(result) {
+          const record = records[result.index];
+          if (result.status === 'success') {
+            const outputBytes = result.value;
+            if (packCount > 0 && packBytes + outputBytes.byteLength > packLimit) await flushPack();
+            zip.file(createOutputFilename(record.file, operation), outputBytes);
+            packBytes += outputBytes.byteLength;
+            packCount += 1;
+            Object.assign(record, { status: 'success', message: '处理成功' });
+            if (packBytes >= packLimit) await flushPack();
+          } else {
+            const failure = classifyPdfError(result.error);
+            Object.assign(record, { status: 'failed', message: failure.message });
+          }
+          renderQueue();
+        },
+      });
+
+      await flushPack(!outcome.cancelled);
+      const summary = summarizeBatchResults(outcome.results);
+      renderResults(summary, outcome.cancelled);
+    } catch (error) {
+      taskUi.fail(error, task);
+    } finally {
+      taskUi.finish(task);
+      renderQueue();
+    }
+  });
+
+  updateControls();
 })();
 
 // ==================== 5. Reorder Pages ====================

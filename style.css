@@ -739,6 +739,81 @@ select:focus-visible {
   color: var(--danger);
 }
 
+/* ==================== Batch Processing ==================== */
+.batch-file-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.batch-file-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.batch-file-item.status-processing { border-color: var(--primary); }
+.batch-file-item.status-success { border-color: #16a34a; }
+.batch-file-item.status-failed { border-color: var(--danger); }
+
+.batch-file-identity {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.batch-file-identity strong,
+.batch-file-identity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-file-identity span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.batch-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.batch-options label {
+  display: grid;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.batch-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.batch-results {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.batch-results h3 {
+  width: 100%;
+  margin: 0;
+  font-size: 14px;
+}
+
 /* ==================== Info Result ==================== */
 .info-result {
   background: var(--surface);
@@ -1417,6 +1492,9 @@ select:focus-visible {
   .tool-panel { max-width: none; }
   .split-options { grid-template-columns: 1fr; }
   .rotate-buttons { flex-direction: column; }
+  .batch-options { grid-template-columns: 1fr; }
+  .batch-actions { flex-direction: column-reverse; }
+  .batch-actions button, .batch-results button { width: 100%; }
   .reorder-toolbar { flex-direction: column; align-items: flex-start; }
   .reorder-actions { width: 100%; }
   .reorder-thumbnail-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
