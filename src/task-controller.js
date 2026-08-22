@@ -34,6 +34,25 @@ export function throwIfAborted(signal) {
   if (signal?.aborted) throw new TaskCancelledError();
 }
 
+export function waitForTask(delayMs, signal) {
+  throwIfAborted(signal);
+  const safeDelay = Math.max(0, Number(delayMs) || 0);
+
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener('abort', cancel);
+      resolve();
+    };
+    const cancel = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      reject(new TaskCancelledError());
+    };
+    const timer = setTimeout(finish, safeDelay);
+    signal?.addEventListener('abort', cancel, { once: true });
+  });
+}
+
 function yieldToMainThread() {
   return new Promise(resolve => setTimeout(resolve, 0));
 }

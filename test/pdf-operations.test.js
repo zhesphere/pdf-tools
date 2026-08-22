@@ -10,7 +10,7 @@ import {
   rotatePdfPages,
   splitPdfPages,
 } from '../src/pdf-operations.js';
-import { createTaskRun, TaskCancelledError } from '../src/task-controller.js';
+import { createTaskRun, TaskCancelledError, waitForTask } from '../src/task-controller.js';
 
 async function createPdf(widths) {
   const document = await PDFDocument.create();
@@ -73,4 +73,11 @@ test('page ranges are parsed inside the engine and long tasks can be cancelled',
     () => splitPdfPages(source, { signal: task.signal, checkpoint: task.checkpoint.bind(task) }),
     TaskCancelledError,
   );
+});
+
+test('cancellable waits stop retry backoff immediately', async () => {
+  const controller = new AbortController();
+  const waiting = waitForTask(10_000, controller.signal);
+  controller.abort();
+  await assert.rejects(waiting, TaskCancelledError);
 });

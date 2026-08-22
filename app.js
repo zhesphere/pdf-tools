@@ -10,7 +10,7 @@ import {
   formatFileSize,
   validatePdfFile,
 } from './src/core.js';
-import { createTaskRun } from './src/task-controller.js';
+import { createTaskRun, waitForTask } from './src/task-controller.js';
 import {
   clearLocalSession,
   loadRecipe,
@@ -885,6 +885,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const statusEl = document.getElementById('edit-status');
   const progressEl = document.getElementById('edit-progress');
   const zoomLabel = document.getElementById('edit-zoom-label');
+  const exportBtn = document.getElementById('edit-export');
+  const taskUi = createTaskUi(progressEl, statusEl);
 
   const state = {
     pdfBytes: null,
@@ -938,12 +940,11 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   setupDragDrop('edit-dropzone', 'edit-input', setFile);
 
   async function loadAndRender(file) {
-    progressEl.style.display = 'block';
-    statusEl.textContent = '加载PDF中...';
-    statusEl.className = 'status-text';
+    const task = taskUi.start('正在读取 PDF…');
 
     try {
       const arrayBuffer = await file.arrayBuffer();
+      task.throwIfCancelled();
       state.pdfBytes = arrayBuffer;
       state.annotations = [];
       state.selectedId = null;
@@ -952,36 +953,38 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       // Load with pdf.js for rendering
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
       state.pdfDoc = await loadingTask.promise;
+      task.throwIfCancelled();
       state.totalPages = state.pdfDoc.numPages;
 
       // Load with pdf-lib to get page dimensions
       const pdfLibDoc = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
       state.pageDims = [];
       for (let i = 0; i < state.totalPages; i++) {
+        task.throwIfCancelled();
         const page = pdfLibDoc.getPage(i);
         const { width, height } = page.getSize();
         state.pageDims.push({ width, height });
+        await task.checkpoint(i + 1, state.totalPages * 2, `正在分析第 ${i + 1}/${state.totalPages} 页`);
       }
 
-      await renderAllPages();
+      await renderAllPages(task, state.totalPages);
 
       uploadArea.style.display = 'none';
       editorDiv.style.display = 'block';
       statusEl.textContent = '';
       showToast(`已加载 ${state.totalPages} 页`, 'success');
     } catch (error) {
-      statusEl.textContent = '❌ 加载PDF失败: ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast('加载失败: ' + error.message, 'error');
+      taskUi.fail(error, task);
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
     }
   }
 
-  async function renderAllPages() {
+  async function renderAllPages(task = null, progressOffset = 0) {
     pagesContainer.innerHTML = '';
 
     for (let i = 0; i < state.totalPages; i++) {
+      task?.throwIfCancelled();
       const pageNum = i + 1;
       const dim = state.pageDims[i];
 
@@ -1005,7 +1008,9 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       canvas.height = viewport.height;
       canvas.style.display = 'block';
       const ctx = canvas.getContext('2d');
-      await pdfPage.render({ canvasContext: ctx, viewport: viewport }).promise;
+      const renderTask = pdfPage.render({ canvasContext: ctx, viewport: viewport });
+      await renderTask.promise;
+      task?.throwIfCancelled();
       card.appendChild(canvas);
 
       // Annotations layer
@@ -1015,6 +1020,13 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       card.appendChild(annLayer);
 
       pagesContainer.appendChild(card);
+      if (task) {
+        await task.checkpoint(
+          progressOffset + pageNum,
+          progressOffset + state.totalPages,
+          `正在渲染第 ${pageNum}/${state.totalPages} 页`,
+        );
+      }
     }
 
     // Re-render all existing annotations
@@ -1216,13 +1228,27 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   document.getElementById('edit-zoom-in').addEventListener('click', async () => {
     if (state.scale >= 4) return;
     state.scale = Math.round((state.scale + 0.25) * 100) / 100;
-    await renderAllPages();
+    const task = taskUi.start('正在更新预览…');
+    try {
+      await renderAllPages(task);
+    } catch (error) {
+      taskUi.fail(error, task);
+    } finally {
+      taskUi.finish(task);
+    }
   });
 
   document.getElementById('edit-zoom-out').addEventListener('click', async () => {
     if (state.scale <= 0.5) return;
     state.scale = Math.round((state.scale - 0.25) * 100) / 100;
-    await renderAllPages();
+    const task = taskUi.start('正在更新预览…');
+    try {
+      await renderAllPages(task);
+    } catch (error) {
+      taskUi.fail(error, task);
+    } finally {
+      taskUi.finish(task);
+    }
   });
 
   // ============ Delete & Deselect ============
@@ -1250,20 +1276,22 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   });
 
   // ============ Export PDF ============
-  document.getElementById('edit-export').addEventListener('click', async () => {
-    progressEl.style.display = 'block';
-    statusEl.textContent = '生成PDF中...';
-    statusEl.className = 'status-text';
+  exportBtn.addEventListener('click', async () => {
+    const task = taskUi.start('正在生成 PDF…');
+    exportBtn.disabled = true;
 
     try {
       const pdfDoc = await PDFLib.PDFDocument.load(state.pdfBytes.slice(0), { ignoreEncryption: true });
+      task.throwIfCancelled();
 
       for (let i = 0; i < state.totalPages; i++) {
+        task.throwIfCancelled();
         const page = pdfDoc.getPage(i);
         const pageH = state.pageDims[i].height;
         const pageAnns = state.annotations.filter(a => a.pageIndex === i);
 
         for (const ann of pageAnns) {
+          task.throwIfCancelled();
           // Convert CSS coordinates to PDF coordinates
           const pdfX = ann.x / state.scale;
           const pdfY = pageH - (ann.y + ann.h) / state.scale;
@@ -1310,6 +1338,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
             });
 
             const pngImage = await pdfDoc.embedPng(pngBytes);
+            task.throwIfCancelled();
             page.drawImage(pngImage, { x: pdfX, y: pdfY, width: pdfW, height: pdfH });
           } else if (ann.type === 'image' && ann.imageDataUrl) {
             // Decode data URL
@@ -1324,20 +1353,22 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
             page.drawImage(image, { x: pdfX, y: pdfY, width: pdfW, height: pdfH });
           }
         }
+        await task.checkpoint(i + 1, state.totalPages, `正在生成第 ${i + 1}/${state.totalPages} 页`);
       }
 
       const pdfBytes = await pdfDoc.save();
-      downloadPdf(pdfBytes, 'edited.pdf');
+      task.throwIfCancelled();
+      const filename = createExportFilename(state.editFile?.name, 'annotated');
+      downloadPdf(pdfBytes, filename);
 
-      statusEl.textContent = '✅ 下载已开始';
+      statusEl.textContent = `✅ ${filename} 下载已开始`;
       statusEl.className = 'status-text success';
-      showToast('PDF导出完成!', 'success');
+      showToast('标注 PDF 已生成，下载已开始', 'success');
     } catch (error) {
-      statusEl.textContent = '❌ 导出失败: ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast('导出失败: ' + error.message, 'error');
+      taskUi.fail(error, task);
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
+      exportBtn.disabled = !state.pdfBytes;
     }
   });
 })();
@@ -1361,6 +1392,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   const langFrom = document.getElementById('translate-lang-from');
   const langTo = document.getElementById('translate-lang-to');
   const consentCheck = document.getElementById('translate-consent');
+  const taskUi = createTaskUi(progressEl, statusEl);
+  let selectionRun = null;
 
   const state = {
     pdfBytes: null,
@@ -1377,7 +1410,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   // ============ Translation API (MyMemory) ============
   const MYMEMORY_API_KEY = ''; // 可选：在 https://mymemory.translated.net 免费注册获取 key，可提升每日配额至 10000 字
 
-  async function translateText(text, from, to, retries = 2) {
+  async function translateText(text, from, to, task = null, retries = 2) {
     if (!text || !text.trim()) return '';
     if (!consentCheck.checked) {
       throw new Error('请先确认联网翻译的隐私说明');
@@ -1391,8 +1424,9 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
     let lastError;
     for (let attempt = 0; attempt <= retries; attempt++) {
+      task?.throwIfCancelled();
       try {
-        const resp = await fetch(url);
+        const resp = await fetch(url, { signal: task?.signal });
         if (!resp.ok) {
           if (resp.status === 429 || resp.status === 403) {
             throw new Error('翻译服务请求过于频繁，请稍后再试（免费API有每日配额限制）');
@@ -1406,21 +1440,22 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
         }
         return data.responseData.translatedText;
       } catch (err) {
+        task?.throwIfCancelled();
         lastError = err;
         if (attempt < retries && (err.message.includes('过于频繁') || err.message.includes('429'))) {
           // 指数退避重试
-          await new Promise(r => setTimeout(r, (attempt + 1) * 2000));
+          await waitForTask((attempt + 1) * 2000, task?.signal);
         } else if (attempt < retries) {
-          await new Promise(r => setTimeout(r, 1000));
+          await waitForTask(1000, task?.signal);
         }
       }
     }
     throw lastError;
   }
 
-  async function translateChunked(text, from, to) {
+  async function translateChunked(text, from, to, task = null) {
     const maxLen = 500;
-    if (text.length <= maxLen) return translateText(text, from, to);
+    if (text.length <= maxLen) return translateText(text, from, to, task);
     const chunks = [];
     let remaining = text;
     while (remaining.length > 0) {
@@ -1433,9 +1468,10 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     }
     const results = [];
     for (let i = 0; i < chunks.length; i++) {
-      results.push(await translateText(chunks[i], from, to));
+      task?.throwIfCancelled();
+      results.push(await translateText(chunks[i], from, to, task));
       // 增加延迟以减少被限流风险
-      await new Promise(r => setTimeout(r, 500));
+      if (i < chunks.length - 1) await waitForTask(500, task?.signal);
     }
     return results.join(' ');
   }
@@ -1446,27 +1482,29 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   });
 
   async function loadTranslatePDF(file) {
-    progressEl.style.display = 'block';
-    statusEl.textContent = '加载PDF中...';
-    statusEl.className = 'status-text';
+    const task = taskUi.start('正在读取 PDF…');
 
     try {
       const arrayBuffer = await file.arrayBuffer();
+      task.throwIfCancelled();
       state.pdfBytes = arrayBuffer;
 
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer.slice(0) });
       state.pdfDoc = await loadingTask.promise;
+      task.throwIfCancelled();
       state.totalPages = state.pdfDoc.numPages;
 
       const pdfLibDoc = await PDFLib.PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
       state.pageDims = [];
       for (let i = 0; i < state.totalPages; i++) {
+        task.throwIfCancelled();
         const page = pdfLibDoc.getPage(i);
         state.pageDims.push(page.getSize());
+        await task.checkpoint(i + 1, state.totalPages * 2, `正在分析第 ${i + 1}/${state.totalPages} 页`);
       }
 
       // Render in select mode by default
-      await renderPagesTo(pagesContainer, state.scale, true);
+      await renderPagesTo(pagesContainer, state.scale, true, task, state.totalPages, state.totalPages * 2);
       pagesContainer.style.display = 'block';
       fullContainer.style.display = 'none';
 
@@ -1477,15 +1515,20 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       statusEl.textContent = '';
       showToast(`已加载 ${state.totalPages} 页`, 'success');
     } catch (error) {
-      statusEl.textContent = '❌ 加载失败: ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast('加载失败: ' + error.message, 'error');
+      taskUi.fail(error, task);
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
     }
   }
 
-  async function renderPagesTo(container, scale, withTextLayer) {
+  async function renderPagesTo(
+    container,
+    scale,
+    withTextLayer,
+    task = null,
+    progressOffset = 0,
+    progressTotal = progressOffset + state.totalPages,
+  ) {
     container.innerHTML = '';
 
     // Calculate a good scale for the available width
@@ -1499,6 +1542,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
     }
 
     for (let i = 0; i < state.totalPages; i++) {
+      task?.throwIfCancelled();
       const pageNum = i + 1;
       const dim = state.pageDims[i];
 
@@ -1520,6 +1564,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       canvas.style.display = 'block';
       const ctx = canvas.getContext('2d');
       await pdfPage.render({ canvasContext: ctx, viewport: viewport }).promise;
+      task?.throwIfCancelled();
       card.appendChild(canvas);
 
       if (withTextLayer) {
@@ -1534,11 +1579,19 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
           viewport: viewport,
         });
         await textLayer.render();
+        task?.throwIfCancelled();
         textLayerDiv.dataset.pageIndex = i;
         card.appendChild(textLayerDiv);
       }
 
       container.appendChild(card);
+      if (task) {
+        await task.checkpoint(
+          progressOffset + pageNum,
+          progressTotal,
+          `正在渲染第 ${pageNum}/${state.totalPages} 页`,
+        );
+      }
     }
   }
 
@@ -1564,11 +1617,20 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       popupOriginal.textContent = selectedText;
       popupResult.textContent = '翻译中...';
 
+      selectionRun?.cancel();
+      const task = createTaskRun();
+      selectionRun = task;
+
       try {
-        const result = await translateChunked(selectedText, langFrom.value, langTo.value);
-        popupResult.textContent = result;
+        const result = await translateChunked(selectedText, langFrom.value, langTo.value, task);
+        if (selectionRun === task) popupResult.textContent = result;
       } catch (err) {
-        popupResult.textContent = '翻译失败，请重试';
+        if (selectionRun === task) {
+          const result = classifyPdfError(err);
+          popupResult.textContent = result.code === 'cancelled' ? '已取消' : '翻译失败，请重试';
+        }
+      } finally {
+        if (selectionRun === task) selectionRun = null;
       }
     }, 300);
   });
@@ -1581,7 +1643,8 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
 
   // ============ Mode Switching ============
   document.querySelectorAll('.translate-mode-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
+      selectionRun?.cancel();
       document.querySelectorAll('.translate-mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       state.mode = btn.dataset.mode;
@@ -1599,9 +1662,16 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
         if (state.totalPages > 0) {
           // Show two-column with placeholder
           pagesContainer.style.display = 'none';
-          fullContainer.style.display = 'grid';
-          renderPagesTo(pdfCol, state.fullScale, false);
-          resultInner.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">点击「开始全文翻译」查看对照结果</div>';
+        fullContainer.style.display = 'grid';
+          const task = taskUi.start('正在准备对照预览…');
+          try {
+            await renderPagesTo(pdfCol, state.fullScale, false, task);
+            resultInner.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-muted);">点击「开始全文翻译」查看对照结果</div>';
+          } catch (error) {
+            taskUi.fail(error, task);
+          } finally {
+            taskUi.finish(task);
+          }
         }
       }
     });
@@ -1611,22 +1681,19 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
   fullTranslateBtn.addEventListener('click', async () => {
     if (state.totalPages === 0) return;
 
-    progressEl.style.display = 'block';
+    const task = taskUi.start('正在准备全文翻译…');
     fullTranslateBtn.disabled = true;
     resultInner.innerHTML = '';
 
     // Show two-column layout
     pagesContainer.style.display = 'none';
     fullContainer.style.display = 'grid';
-    await renderPagesTo(pdfCol, state.fullScale, false);
-
-    statusEl.textContent = '提取文本并翻译中...';
-    statusEl.className = 'status-text';
-
     try {
+      await renderPagesTo(pdfCol, state.fullScale, false, task, 0, state.totalPages * 3);
       // Extract paragraphs preserving format
       const paragraphs = [];
       for (let i = 0; i < state.totalPages; i++) {
+        task.throwIfCancelled();
         const page = await state.pdfDoc.getPage(i + 1);
         const textContent = await page.getTextContent();
 
@@ -1661,6 +1728,7 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
           paraLines.push(lineText);
         }
         if (paraLines.length) paragraphs.push({ pageIndex: i, text: paraLines.join(' ') });
+        task.report(state.totalPages + i + 1, state.totalPages * 3, `正在提取第 ${i + 1}/${state.totalPages} 页文字`);
       }
 
       // Translate paragraph by paragraph
@@ -1668,10 +1736,16 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
       const to = langTo.value;
       let failCount = 0;
       for (let k = 0; k < paragraphs.length; k++) {
-        statusEl.textContent = `翻译中 (${k + 1}/${paragraphs.length})...`;
+        task.throwIfCancelled();
+        task.report(
+          state.totalPages * 2 + ((k + 1) / paragraphs.length) * state.totalPages,
+          state.totalPages * 3,
+          `正在翻译第 ${k + 1}/${paragraphs.length} 段`,
+        );
         try {
-          paragraphs[k].translated = await translateChunked(paragraphs[k].text, from, to);
+          paragraphs[k].translated = await translateChunked(paragraphs[k].text, from, to, task);
         } catch (err) {
+          task.throwIfCancelled();
           paragraphs[k].translated = `[翻译失败: ${err.message}]`;
           failCount++;
           // 如果连续失败超过3次，可能配额已耗尽，停止继续请求
@@ -1680,10 +1754,10 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
             break;
           }
           // 失败后等待更长时间再试下一段
-          await new Promise(r => setTimeout(r, 2000));
+          await waitForTask(2000, task.signal);
         }
         // 段落之间稍作延迟
-        await new Promise(r => setTimeout(r, 300));
+        if (k < paragraphs.length - 1) await waitForTask(300, task.signal);
       }
 
       // Render results on the right — preserving original format
@@ -1717,12 +1791,10 @@ function setupDragDrop(dropzoneId, inputId, callback, multiple = false) {
         showToast(`全文翻译完成! 共 ${paragraphs.length} 段`, 'success');
       }
     } catch (error) {
-      resultInner.innerHTML = `<div style="padding:24px;color:var(--danger);">翻译失败: ${escapeHtml(error.message)}</div>`;
-      statusEl.textContent = '❌ 翻译失败: ' + error.message;
-      statusEl.className = 'status-text error';
-      showToast('翻译失败: ' + error.message, 'error');
+      const result = taskUi.fail(error, task);
+      resultInner.innerHTML = `<div style="padding:24px;color:var(--danger);">${escapeHtml(result.message)}</div>`;
     } finally {
-      progressEl.style.display = 'none';
+      taskUi.finish(task);
       fullTranslateBtn.disabled = false;
     }
   });
